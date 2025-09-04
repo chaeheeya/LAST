@@ -176,7 +176,7 @@ if __name__ == "__main__":
 
     inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
     inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
-    gpt_response = json.load(open('response_gen/0904190453_gpt-4.1_inspired2_test_GPT_response_100token.json', 'r', encoding='utf-8'))
+    gpt_response = json.load(open('refinement/0904214231_gpt-4.1_inspired2_test_100token_refinement.json', 'r', encoding='utf-8'))
 
     prompt = EVAL_scoring_guide_prompt
     MODEL = "gpt-4.1"

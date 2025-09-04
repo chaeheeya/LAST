@@ -83,7 +83,7 @@ def parse_args():
     parser.add_argument('--log_name', type=str, default="")
     parser.add_argument('--batch_size', type=int, default=2)
     parser.add_argument('--model_path', type=str, default="")
-    parser.add_argument('--max_new_tokens', type=str, default=100)
+    parser.add_argument('--max_new_tokens', type=int, default=100)
 
     args = parser.parse_args()
 
