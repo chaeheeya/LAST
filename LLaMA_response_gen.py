@@ -51,6 +51,7 @@ class Dataset_processing(Dataset):
         elif self.args.dataset == 'test':
             dataset = self.test_dataset
 
+        print("Dataset length: ", len(dataset))
         self.formatted_dataset = []
         for data in dataset:
             formatted_context = self.tokenizer.apply_chat_template(
