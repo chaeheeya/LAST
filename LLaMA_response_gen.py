@@ -83,6 +83,7 @@ def parse_args():
     parser.add_argument('--log_name', type=str, default="")
     parser.add_argument('--batch_size', type=int, default=2)
     parser.add_argument('--model_path', type=str, default="")
+    parser.add_argument('--max_new_tokens', type=str, default=100)
 
     args = parser.parse_args()
 
@@ -200,7 +201,7 @@ if __name__ == '__main__':
                 attention_mask=attention_mask,
                 generation_config=generation_config,
                 return_dict_in_generate=True,
-                max_new_tokens=256,
+                max_new_tokens=args.max_new_tokens,
                 pad_token_id=tokenizer.pad_token_id
             )
         sequences = generation_output.sequences  # shape: (batch * num_return_sequences, seq_len)
