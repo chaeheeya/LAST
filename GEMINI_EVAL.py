@@ -50,7 +50,7 @@ Evaluate the response from each competitor in terms of informativeness, fluency,
 
 1) Informativeness: Whether the response incorporates rich knowledge
 2) Fluency: Whether the response includes diverse words
-3) Relevance: Whether the response provides explanations about the recommended item with its features relevant to the dialog context
+3) Relevance: Whether the response recommends proper items and their explanatory features relevant to the dialog context
 
 Guideline for scoring:
 - 1 point: The response is very poor. It fails almost entirely to meet this criterion.
@@ -73,6 +73,8 @@ def parse_args():
     parser.add_argument('--gemini_model', type=str, default="gemini-2.5-pro")
     parser.add_argument('--cnt', type=int, default=0)
     parser.add_argument('--log_name', type=str, default="")
+    parser.add_argument('--dataset_path', type=str, default="")
+    parser.add_argument('--response_path', type=str, default="")
     args = parser.parse_args()
     return args
 
@@ -83,13 +85,21 @@ if __name__=='__main__':
     args = parse_args()
     client = genai.Client(api_key=args.access_token)
 
-    inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
+    # inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
+    dataset = pickle.load(open(args.dataset_path, 'rb'))
+    gpt_response = json.load(open(args.response_path, 'r', encoding='utf-8'))
+
     prompt = EVAL_scoring_guide_prompt
     # MODEL = genai.GenerativeModel(args.gemini_model)
 
     instructions = []
-    for idx, data in enumerate(inspired2_test):
-        instruction = prompt % (data['dialog'], data['response'])
+    for idx, (data, response) in enumerate(zip(dataset, gpt_response)):
+        dialog = data['dialog']
+        response = response['OUTPUT']
+        if not response.strip().startswith('System: '):
+            response = 'System: ' + response
+
+        instruction = prompt % (dialog, response)
         instructions.append(instruction)
 
     mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
@@ -104,11 +114,21 @@ if __name__=='__main__':
     # Evaluation 시작
     print('GEMINI START')
     cnt = args.cnt
-    for instruction in tqdm(instructions[cnt:], bar_format=' {percentage:3.0f} % | {bar:23} {r_bar}'):
-        response = client.models.generate_content(
-            model=args.gemini_model,
-            contents=instruction
-        )
+    # for instruction in tqdm(instructions[cnt:], bar_format=' {percentage:3.0f} % | {bar:23} {r_bar}'):
+    pbar = tqdm(total=len(instructions), initial=cnt, bar_format=' {percentage:3.0f} % | {bar:30} {n_fmt}/{total_fmt}')
+    while cnt < len(instructions):
+        instruction = instructions[cnt]
+        try:
+            response = client.models.generate_content(model=args.gemini_model, contents=instruction)
+            response = response.text
 
-        args.log_file.write(json.dumps({'INPUT': instruction, 'OUTPUT': response.text}, ensure_ascii=False, indent=4) + '\n')
-        cnt += 1
+            args.log_file.write(
+                json.dumps({'INPUT': instruction, 'OUTPUT': response}, ensure_ascii=False, indent=4) + '\n')
+            cnt += 1
+            pbar.update(1)
+
+        except Exception as error:
+            print("%s | ERROR cnt: %d" % (error, cnt))
+            print(args.log_file)
+            # args.cnt = int(cnt)
+            time.sleep(5)

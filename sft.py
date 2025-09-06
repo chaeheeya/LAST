@@ -1,7 +1,14 @@
-import json
 import os
+import sys
+import json
+import logging
+import argparse
+import random
+
 import torch
-from tqdm import tqdm
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -12,15 +19,12 @@ from transformers import (
     DataCollatorForSeq2Seq,
     TrainerState, TrainerControl, TrainerCallback
 )
-from peft import LoraConfig, get_peft_model, TaskType
-from parser import parse_args
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+
 from datetime import datetime
 from pytz import timezone
-import logging
-import sys
-from random import shuffle
-from interact import instruction
-from utils import load_peft_model
+
+
 
 # === Hyperparameters ===
 # MODEL_NAME = "meta-llama/Meta-Llama-3.1-8B-Instruct"
@@ -28,8 +32,11 @@ from utils import load_peft_model
 # LEARNING_RATE = 3e-5
 # BATCH_SIZE = 4
 # LOGGING_STEPS = 100
-import wandb
 
+
+
+instruction = """Pretend you are a conversational recommender system. 
+Create a response that the system should provide."""
 
 class QueryEvalCallback(TrainerCallback):
     def __init__(self, output_dir):
@@ -45,6 +52,110 @@ class QueryEvalCallback(TrainerCallback):
         peft_model.save_pretrained(path)
         # 3. config도 같이 저장
         peft_model.config.save_pretrained(path)
+        print(f"Epoch {state.epoch} finished, saving model to {self.saved_model_path}")
+
+
+
+class Dataset_processing(Dataset):
+    def __init__(self, args, json_dataset, tokenizer, instruction, train_only_resp=False, rank, world_size):
+        self.args = args
+        self.tokenizer = tokenizer
+
+        self.instruction = instruction
+
+        self.dataset = json_dataset
+
+        # dialog -> utterance 로 쪼개기
+        for data in self.dataset:
+            dialog = data['dialog'].split('\n')
+            context = []
+            for utt in dialog:
+                if "System: " in utt:
+                    utt = utt.split('System: ')[1].split('\n')[0]
+                    context.append({'role': "assistant", 'content': utt})
+                elif "User: " in utt:
+                    utt = utt.split('User: ')[1].split('\n')[0]
+                    context.append({'role': "user", 'content': utt})
+                else:
+                    print('ERROR')
+            data['dialog'] = context
+
+        # dataset format 맞추기
+        print("Dataset length: ", len(self.dataset))
+
+        random.shuffle(self.dataset)
+        data = self.dataset[rank::world_size]
+
+        self.formatted_dataset = []
+        for data in self.dataset:
+
+            dialog = data['DIALOG'][-5:]
+            dialog.insert(0, {'role': 'system', 'content': self.instruction})
+
+            response = data['RESPONSE']
+            context = dialog + response
+
+            original_context_len = len(
+                tokenizer.apply_chat_template(dialog, tokenize=True, add_generation_prompt=True))
+            formatted_context = self.tokenizer.apply_chat_template(context,tokenize=False,add_generation_prompt=False) # Train 할때는 add_generation_prompt=False로 설정해야함 -> True로 하면 <|im_start|>assistant 가 생성되는데
+            # formatted_context = self.tokenizer(formatted_context, padding='max_length', truncation=True, max_length=1024, return_tensors='pt')
+            # dialog_text = "\n".join([f"{i['role']}: {i['content']}" for i in data['dialog']])
+
+            tokenized_context = tokenizer(formatted_context, padding=True)
+            input_ids = tokenized_context.input_ids
+            labels = input_ids.copy()
+
+            if train_only_resp:
+                labels = [token if idx >= original_context_len else -100 for idx, token in enumerate(input_ids)]
+
+            self.formatted_dataset.append({'input_ids': input_ids, "labels": labels})
+
+        # self.tokenizer.apply_chat_template([{'role': 'system', 'content': instruction}] + inspired2_train[0]['dialog'], tokenize=True, padding=True, max_length=128, add_generation_prompt=True)
+
+    def __len__(self):
+        # 데이터 샘플 개수를 반환
+        return len(self.formatted_dataset)
+
+    def __getitem__(self, idx):
+        data = self.formatted_dataset[idx]
+        return {'input_ids': data['input_ids'], "labels": data['labels']}
+
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+
+    # Dataset
+    parser.add_argument('--dataset', type=str, default="train")
+    parser.add_argument('--batch_size', type=int, default=2)
+
+    # Generation
+    parser.add_argument('--model_path', type=str, default="")
+    parser.add_argument('--max_new_tokens', type=int, default=100)
+
+    # Train
+    parser.add_argument('--train_data', type=str, default="", help="Write only the data name(not the path)")
+
+    parser.add_argument('--lora_weights', type=str, default=None)
+    parser.add_argument('--access_token', type=str, default="")
+    parser.add_argument('--cnt', type=int, default=0)
+    parser.add_argument('--log_name', type=str, default="")
+
+    args = parser.parse_args()
+
+    from platform import system as sysChecker
+    if sysChecker() == 'Linux':
+        args.home = os.path.dirname(__file__)
+    elif sysChecker() == "Windows":
+        args.home = ''
+    print(args.home)
+
+    if args.model_path != '':
+        args.model_path = os.path.join(args.home, 'model_weights', args.model_path)
+
+    return args
+
 
 
 def load_base_model(model_name, model_path=''):
@@ -71,6 +182,24 @@ def load_base_model(model_name, model_path=''):
     return base_model
 
 
+def load_peft_model(model, model_path, is_trainable=True):
+    if model_path != '':
+        peft_model = PeftModel.from_pretrained(model, model_path, is_trainable=is_trainable)
+    else:
+        lora_config = LoraConfig(
+            r=64,
+            lora_alpha=16,
+            target_modules=["q_proj", "v_proj"],
+            lora_dropout=0.05,
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+        )
+        peft_model = get_peft_model(model, lora_config)
+    peft_model.print_trainable_parameters()
+
+    return peft_model
+
+
 def setup_tokenizer(model_name):
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
@@ -78,50 +207,51 @@ def setup_tokenizer(model_name):
     return tokenizer
 
 
-def prepare_dataset(data_path, tokenizer, rank, world_size, train_only_interaction=False):
-    all_data = json.load(open(data_path, 'r', encoding='utf-8'))
-    # all_data = all_data[:10]
-    shuffle(all_data)
-
-    # 데이터 분산 처리
-    data = all_data[rank::world_size]
-
-    dataset = []
-
-    for example in data:
-
-        dialog = example['dialog'][-5:]
-        dialog.insert(0, {'role': 'system', 'content': instruction})
-
-        interaction = example['interaction'][:-1]
-        # context = dialog + interaction
-
-        context = dialog + interaction
-
-        original_context_len = len(tokenizer.apply_chat_template(dialog, tokenize=True, add_generation_prompt=True))
-        prompt = tokenizer.apply_chat_template(context, tokenize=False, add_generation_prompt=False)
-        # if prompt in dataset:
-        #     continue
-
-        # tokenized_prompt = tokenizer(prompt, truncation=True, max_length=512, add_special_tokens=False)
-        tokenized_prompt = tokenizer(prompt, truncation=True, add_special_tokens=False)
-
-        input_ids = tokenized_prompt.input_ids
-        labels = input_ids.copy()
-        if train_only_interaction:
-            labels = [token if idx >= original_context_len else -100 for idx, token in enumerate(input_ids)]
-
-        dataset.append({'input_ids': input_ids, "labels": labels})
-
-    return dataset
+# def prepare_dataset(data_path, tokenizer, rank, world_size, train_only_interaction=False):
+#     all_data = json.load(open(data_path, 'r', encoding='utf-8'))
+#     # all_data = all_data[:10]
+#     shuffle(all_data)
+#
+#     # 데이터 분산 처리
+#     data = all_data[rank::world_size]
+#
+#     dataset = []
+#
+#     for example in data:
+#
+#         dialog = example['dialog'][-5:]
+#         dialog.insert(0, {'role': 'system', 'content': instruction})
+#         interaction = example['interaction'][:-1]
+#         # context = dialog + interaction
+#
+#         context = dialog + interaction
+#
+#         original_context_len = len(tokenizer.apply_chat_template(dialog, tokenize=True, add_generation_prompt=True))
+#         prompt = tokenizer.apply_chat_template(context, tokenize=False, add_generation_prompt=False)
+#         # if prompt in dataset:
+#         #     continue
+#
+#         # tokenized_prompt = tokenizer(prompt, truncation=True, max_length=512, add_special_tokens=False)
+#         tokenized_prompt = tokenizer(prompt, truncation=True, add_special_tokens=False)
+#         input_ids = tokenized_prompt.input_ids
+#         labels = input_ids.copy()
+#         if train_only_interaction:
+#             labels = [token if idx >= original_context_len else -100 for idx, token in enumerate(input_ids)]
+#
+#         dataset.append({'input_ids': input_ids, "labels": labels})
+#
+#     return dataset
 
 
 def main(args):
-    tokenizer = setup_tokenizer(args.model_name)
-    base_model = load_base_model(args.model_name)
+    tokenizer = setup_tokenizer("meta-llama/Llama-3.1-8B-Instruct")
+    base_model = load_base_model("meta-llama/Llama-3.1-8B-Instruct")
     base_model.resize_token_embeddings(len(tokenizer))
     base_model.config.pad_token_id = tokenizer.pad_token_id
-    model = load_peft_model(base_model, args.model_path)
+    if args.model_path != '':
+        model = load_peft_model(base_model, args.model_path)
+    else:
+        model = base_model
     # model = get_peft_model(base_model, lora_config)
 
     # wandb.init(
@@ -146,26 +276,38 @@ def main(args):
 
     # Prepare dataset
     #    data_path = os.path.join(args.home, 'data', 'redial_processed_train_sft_gpt_turn3.json')   # BS수정
-    data_path = os.path.join(args.home, 'data', args.train_data)  # 'redial_processed_train_sft_gpt.json'
+    dataset_path = os.path.join(args.home, 'dataset', 'sft_train', args.train_data)
+    dataset = json.load(open(dataset_path, 'r', encoding='utf-8'))
 
-    tokenized_dataset = prepare_dataset(
-        data_path, tokenizer, rank, world_size, args.train_only_interaction
-    )
+    train_dataset = Dataset_processing(args, dataset, tokenizer, instruction, rank, world_size)
+    # dataset_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+
 
     # Logging 설정
     mdhm = datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S')
-    log_name = args.log_name
-    log_file = os.path.join(args.home, 'results', 'sft', f'sft_{mdhm}_{log_name}.txt')
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    # mdhm = datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S')
-    model_path = os.path.join(args.home, 'model_weights', f"sft_model_{mdhm}_{log_name}")
+    dir_name = ''
+    if 'benchmark' in dataset_path:
+        dir_name = 'benchmark'
+    elif 'GPT' in dataset_path:
+        if 'refined' in dataset_path:
+            dir_name = 'refined_gpt'
+        else:
+            dir_name = 'gpt'
+
+    # log_name = args.log_name
+    #
+    #
+    # logging.basicConfig(
+    #     level=logging.INFO,
+    #     format="%(message)s",
+    #     handlers=[
+    #         logging.FileHandler(log_file, encoding="utf-8"),
+    #         logging.StreamHandler(sys.stdout)
+    #     ]
+    # )
+
+    model_path = os.path.join(args.home, 'model_weights', f'{dir_name}', f'{mdhm}')
+    print('Model saving path: %s' % model_path)
 
     training_args = TrainingArguments(
         deepspeed=args.deepspeed if args.deepspeed != '' else None,
@@ -182,13 +324,7 @@ def main(args):
         # report_to='wandb'
         # logging_dir="./logs",
         # report_to="wandb" if args.use_wandb else "none",
-
     )
-
-    # data_collator = DataCollatorForSeq2Seq(
-    #     model=model,
-    #     tokenizer=tokenizer,
-    # )
 
     data_collator = DataCollatorForSeq2Seq(
         tokenizer,
@@ -199,10 +335,10 @@ def main(args):
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized_dataset,
+        train_dataset=train_dataset,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        # callbacks=[QueryEvalCallback(model_path)]
+        callbacks=[QueryEvalCallback(training_args.output_dir)]
     )
 
     # 학습 시작

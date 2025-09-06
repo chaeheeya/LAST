@@ -97,7 +97,7 @@ if __name__ == "__main__":
     MODEL = "gpt-4.1"
 
     instructions = []
-    for idx, data in enumerate(inspired2_test):
+    for idx, data in enumerate(inspired2_train):
         instruction = prompt % (data['dialog'])
         instructions.append(instruction)
 

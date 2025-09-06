@@ -1,6 +1,6 @@
 import json
 
-eval_result_path = 'evaluation/gpt_eval/0904192110_gpt-4.1_result_inspired2_test_gpt-4.1-response_100token.json'
+eval_result_path = 'evaluation/gemini_eval/0906120440_gemini-2.5-pro_result_inspired2_test_GPT4.1.json'
 eval_result = json.load(open(eval_result_path, 'r', encoding='utf-8'))
 
 informativeness, fluency, relevance = 0, 0, 0

@@ -102,14 +102,14 @@ if __name__ == "__main__":
     inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
     inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
 
-    generated_response = json.load(open('response_gen/0904190453_gpt-4.1_inspired2_test_GPT_response_100token.json', 'r', encoding='utf-8'))
-    eval_gen_response = json.load(open('evaluation/gpt_eval/0904192110_gpt-4.1_result_inspired2_test_gpt-4.1-response_100token.json', 'r', encoding='utf-8'))
+    generated_response = json.load(open('response_gen/0905163347_gpt-4.1_inspired2_train_GPT_response_100token.json', 'r', encoding='utf-8'))
+    eval_gen_response = json.load(open('evaluation/gpt_eval/0905180629_gpt-4.1_result_inspired2_train_gpt4.1-response_newP.json', 'r', encoding='utf-8'))
 
     prompt = REFINE_RESPONSE_prompt
     MODEL = "gpt-4.1"
 
     instructions = []
-    for idx, (data, gen_response, eval_gen) in enumerate(zip(inspired2_test, generated_response, eval_gen_response)):
+    for idx, (data, gen_response, eval_gen) in enumerate(zip(inspired2_train, generated_response, eval_gen_response)):
         dialog = data['dialog']
         new_response = gen_response['OUTPUT']
         if not new_response.strip().startswith('System: '):
