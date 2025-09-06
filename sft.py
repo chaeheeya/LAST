@@ -142,6 +142,7 @@ def parse_args():
     parser.add_argument('--step_size', type=int, default=300)
     parser.add_argument('--logging_steps', type=int, default=100)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
+    parser.add_argument('--train_only_response', action='store_true')
 
     parser.add_argument('--lora_weights', type=str, default=None)
     parser.add_argument('--access_token', type=str, default="")
@@ -282,7 +283,7 @@ def main(args):
     dataset_path = os.path.join(args.home, 'dataset', 'sft_train', args.train_data)
     dataset = json.load(open(dataset_path, 'r', encoding='utf-8'))
 
-    train_dataset = Dataset_processing(args, dataset, tokenizer, instruction, rank, world_size)
+    train_dataset = Dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, train_only_resp=args.train_only_response)
     # dataset_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Logging 설정

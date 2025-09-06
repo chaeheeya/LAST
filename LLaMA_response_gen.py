@@ -162,13 +162,15 @@ if __name__ == '__main__':
     model.config.pad_token_id = tokenizer.pad_token_id
     if args.model_path:
         model = load_peft_model(model, args.model_path)
+        model_name_for_file = args.model_path.replace('/', '-')
 
     mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
+    
 
     result_path = os.path.join(args.home, 'response_gen')
     if not os.path.isdir(result_path):
         os.mkdir(result_path)
-    json_path = os.path.join(result_path, f'{args.model_path}_inspired2_LLaMA-3.1-response.json')
+    json_path = os.path.join(result_path, f'{model_name_for_file}_inspired2_LLaMA-3.1-response.json')
     json_file = open(json_path, 'a', buffering=1, encoding='UTF-8')
 
     rank, world_size = 0, 1
