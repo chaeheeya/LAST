@@ -24,8 +24,6 @@ from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from datetime import datetime
 from pytz import timezone
 
-
-
 # === Hyperparameters ===
 # MODEL_NAME = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 # TOTAL_EPOCHS = 5
@@ -34,9 +32,9 @@ from pytz import timezone
 # LOGGING_STEPS = 100
 
 
-
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
+
 
 class QueryEvalCallback(TrainerCallback):
     def __init__(self, output_dir):
@@ -55,19 +53,16 @@ class QueryEvalCallback(TrainerCallback):
         print(f"Epoch {state.epoch} finished, saving model to {self.saved_model_path}")
 
 
-
 class Dataset_processing(Dataset):
-    def __init__(self, args, json_dataset, tokenizer, instruction, train_only_resp=False, rank, world_size):
+    def __init__(self, args, json_dataset, tokenizer, instruction, rank, world_size, train_only_resp=False, ):
         self.args = args
         self.tokenizer = tokenizer
-
         self.instruction = instruction
-
         self.dataset = json_dataset
 
         # dialog -> utterance 로 쪼개기
         for data in self.dataset:
-            dialog = data['dialog'].split('\n')
+            dialog = data['DIALOG'].split('\n')
             context = []
             for utt in dialog:
                 if "System: " in utt:
@@ -78,7 +73,9 @@ class Dataset_processing(Dataset):
                     context.append({'role': "user", 'content': utt})
                 else:
                     print('ERROR')
-            data['dialog'] = context
+            response_utt = data['RESPONSE'].split('System: ')[1].strip()
+            context.append({'role': "assistant", 'content': response_utt})
+            data['DIALOG'] = context
 
         # dataset format 맞추기
         print("Dataset length: ", len(self.dataset))
@@ -89,19 +86,18 @@ class Dataset_processing(Dataset):
         self.formatted_dataset = []
         for data in self.dataset:
 
-            dialog = data['DIALOG'][-5:]
+            dialog = data['DIALOG'][-6:]
             dialog.insert(0, {'role': 'system', 'content': self.instruction})
 
-            response = data['RESPONSE']
-            context = dialog + response
-
+            context = dialog
             original_context_len = len(
-                tokenizer.apply_chat_template(dialog, tokenize=True, add_generation_prompt=True))
-            formatted_context = self.tokenizer.apply_chat_template(context,tokenize=False,add_generation_prompt=False) # Train 할때는 add_generation_prompt=False로 설정해야함 -> True로 하면 <|im_start|>assistant 가 생성되는데
+                tokenizer.apply_chat_template(context[:-1], tokenize=True, add_generation_prompt=True))
+            formatted_context = self.tokenizer.apply_chat_template(context, tokenize=False, add_generation_prompt=False)
             # formatted_context = self.tokenizer(formatted_context, padding='max_length', truncation=True, max_length=1024, return_tensors='pt')
             # dialog_text = "\n".join([f"{i['role']}: {i['content']}" for i in data['dialog']])
 
-            tokenized_context = tokenizer(formatted_context, padding=True)
+            tokenized_context = tokenizer(formatted_context, truncation=True, add_special_tokens=False)
+
             input_ids = tokenized_context.input_ids
             labels = input_ids.copy()
 
@@ -121,10 +117,8 @@ class Dataset_processing(Dataset):
         return {'input_ids': data['input_ids'], "labels": data['labels']}
 
 
-
 def parse_args():
     parser = argparse.ArgumentParser()
-
 
     # Dataset
     parser.add_argument('--dataset', type=str, default="train")
@@ -133,9 +127,21 @@ def parse_args():
     # Generation
     parser.add_argument('--model_path', type=str, default="")
     parser.add_argument('--max_new_tokens', type=int, default=100)
+    parser.add_argument('--num_beams', type=int, default=1)
+    parser.add_argument('--do_sample', action='store_true')
+    parser.add_argument('--temperature', type=float, default=1.0)
+    parser.add_argument('--top_p', type=float, default=1.0)
+    parser.add_argument('--top_k', type=int, default=50)
 
     # Train
     parser.add_argument('--train_data', type=str, default="", help="Write only the data name(not the path)")
+    parser.add_argument('--deepspeed', type=str, default='')
+    parser.add_argument('--local_rank', type=int, default=-1)
+    parser.add_argument('--epoch', type=int, default=2)
+    parser.add_argument('--learning_rate', type=float, default=3e-5)
+    parser.add_argument('--step_size', type=int, default=300)
+    parser.add_argument('--logging_steps', type=int, default=100)
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
 
     parser.add_argument('--lora_weights', type=str, default=None)
     parser.add_argument('--access_token', type=str, default="")
@@ -155,7 +161,6 @@ def parse_args():
         args.model_path = os.path.join(args.home, 'model_weights', args.model_path)
 
     return args
-
 
 
 def load_base_model(model_name, model_path=''):
@@ -248,10 +253,8 @@ def main(args):
     base_model = load_base_model("meta-llama/Llama-3.1-8B-Instruct")
     base_model.resize_token_embeddings(len(tokenizer))
     base_model.config.pad_token_id = tokenizer.pad_token_id
-    if args.model_path != '':
-        model = load_peft_model(base_model, args.model_path)
-    else:
-        model = base_model
+    model = load_peft_model(base_model, args.model_path)
+
     # model = get_peft_model(base_model, lora_config)
 
     # wandb.init(
@@ -281,7 +284,6 @@ def main(args):
 
     train_dataset = Dataset_processing(args, dataset, tokenizer, instruction, rank, world_size)
     # dataset_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-
 
     # Logging 설정
     mdhm = datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S')
