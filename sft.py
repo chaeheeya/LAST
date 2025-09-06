@@ -44,7 +44,7 @@ class QueryEvalCallback(TrainerCallback):
         wrapper_model = kwargs['model']  # 전체 wrapper 모델
         peft_model = wrapper_model.model  # PEFT 모델 내부
         epoch = state.epoch
-        path = os.path.join(self.saved_model_path, f'E{int(epoch)}')
+        path = os.path.join(self.saved_model_path, f'E{round(epoch)}')
 
         # 1. PEFT LoRA 파라미터만 저장
         peft_model.save_pretrained(path)
