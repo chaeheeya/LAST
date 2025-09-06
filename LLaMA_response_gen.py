@@ -13,7 +13,7 @@ from pytz import timezone
 from datetime import datetime
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, BitsAndBytesConfig
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
@@ -168,7 +168,7 @@ if __name__ == '__main__':
     result_path = os.path.join(args.home, 'response_gen')
     if not os.path.isdir(result_path):
         os.mkdir(result_path)
-    json_path = os.path.join(result_path, f'{mdhm}_inspired2_LLaMA-3.1-response.json')
+    json_path = os.path.join(result_path, f'{args.model_path}_inspired2_LLaMA-3.1-response.json')
     json_file = open(json_path, 'a', buffering=1, encoding='UTF-8')
 
     rank, world_size = 0, 1
