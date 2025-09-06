@@ -1,12 +1,12 @@
 import json
 
-eval_result_path = 'evaluation/gemini_eval/0906120440_gemini-2.5-pro_result_inspired2_test_GPT4.1.json'
+eval_result_path = 'evaluation/gemini_eval/0906100918_gemini-2.5-pro_result_inspired2_test_llama3.1-pt.json'
 eval_result = json.load(open(eval_result_path, 'r', encoding='utf-8'))
 
 informativeness, fluency, relevance = 0, 0, 0
 for result in eval_result:
 
-    output = result['OUTPUT']
+    output = result['output']
     think = output.split('<think>')[-1].split('</think>')[0].strip()
     answer = output.split('<answer>')[-1].split('</answer>')[0].strip()
 
