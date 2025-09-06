@@ -370,7 +370,7 @@ def main(args):
     # merged_model.save_pretrained(model_path + "_merged")
     # tokenizer.save_pretrained(model_path + "_merged")
     # logging.info("✅ Merge된 모델 저장 완료")
-
+    #ckckckckck
 
 if __name__ == "__main__":
     args = parse_args()
