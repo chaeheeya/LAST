@@ -192,7 +192,7 @@ if __name__ == "__main__":
     if args.log_name == '':
         log_name = f'evaluation/gpt_eval/{mdhm}_{MODEL}_result.json'
     else:
-        log_name = args.log_name
+        log_name = f'evaluation/gpt_eval/{MODEL}_eval_{args.log_name}'
 
     args.log_file = open(os.path.join(log_name), 'a', buffering=1, encoding='UTF-8')
 
