@@ -30,6 +30,29 @@ Based on the response evaluation, your task is to generate a refined response th
 The generated response should not exceed 100 tokens."""
 
 
+REFINE_RESPONSE_item_prompt = """I will give you a dialog between a user and the system, the system's next response, and an evaluation of that response in terms of validity, informativeness, fluency, and relevance.
+
+Dialog:
+%s
+
+Response:
+%s
+
+Response Evaluation:
+%s
+
+The evaluator's assessment criteria are:
+A. Recommendation Quality
+1) Validity: Does the recommended item align with the user’s preferences expressed in the dialog?
+
+B. Explanation Quality
+1) Informativeness: Does the explanation incorporate rich and meaningful knowledge about the item?
+2) Fluency: Is the explanation natural, coherent, and expressed with varied wording?
+3) Relevance: Does the explanation highlight item features that are directly relevant to the dialog context?
+
+Based on the response evaluation, your task is to generate a refined response that can achieve the best possible evaluation across validity, informativeness, fluency, and relevance.
+The generated response should not exceed 100 tokens."""
+
 
 
 def parse_args():
@@ -103,9 +126,9 @@ if __name__ == "__main__":
     inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
 
     generated_response = json.load(open('response_gen/0905163347_gpt-4.1_inspired2_train_GPT_response_100token.json', 'r', encoding='utf-8'))
-    eval_gen_response = json.load(open('evaluation/gpt_eval/0905180629_gpt-4.1_result_inspired2_train_gpt4.1-response_newP.json', 'r', encoding='utf-8'))
+    eval_gen_response = json.load(open('evaluation/gpt_eval/gpt-4.1_eval_inspired2_train_gpt-4.1-resp_twodimP.json', 'r', encoding='utf-8'))
 
-    prompt = REFINE_RESPONSE_prompt
+    prompt = REFINE_RESPONSE_item_prompt
     MODEL = "gpt-4.1"
 
     instructions = []
@@ -116,6 +139,7 @@ if __name__ == "__main__":
             new_response = 'System: ' + new_response
 
         eval_response = eval_gen['OUTPUT'].split('<think>')[-1].split('</think>')[0].strip()
+        target_item = data['topic']
 
         instruction = prompt % (dialog, new_response, eval_response)
         instructions.append(instruction)
