@@ -1,6 +1,7 @@
 import os
 import json
 import pickle
+import copy
 import math
 import time
 import random
@@ -34,14 +35,14 @@ def parse_args():
     # Train
     parser.add_argument('--base_model', type=str, default="") #LLaMA-3.1: "meta-llama/Llama-3.1-8B-Instruct"
     parser.add_argument('--model_path', type=str, default="", help="SFT model path")
-    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
     parser.add_argument('--num_train_epochs', type=int, default=2)
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--logging_steps', type=int, default=100)
 
     # GRPO config
-    parser.add_argument('--num_generations', type=int, default=1)
+    parser.add_argument('--num_generations', type=int, default=8)
     parser.add_argument('--max_completion_length', type=int, default=100)
     parser.add_argument('--temperature', type=float, default=1.0)
     parser.add_argument('--top_p', type=float, default=1.0)
@@ -130,7 +131,7 @@ class SaveEveryEpochCallback(TrainerCallback):
     def __init__(self, output_dir):
         self.saved_model_path = output_dir
 
-    def on_epoch_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+    def on_epoch_end(self,args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         wrapper_model = kwargs['model']  # 전체 wrapper 모델
         peft_model = wrapper_model.model  # PEFT 모델 내부
         epoch = state.epoch
@@ -141,7 +142,6 @@ class SaveEveryEpochCallback(TrainerCallback):
         # 3. config도 같이 저장
         peft_model.config.save_pretrained(path)
         print(f"Epoch {state.epoch} finished, saving model to {self.saved_model_path}")
-
 
 
 
@@ -200,8 +200,6 @@ class Dataset_processing(Dataset):
 
     def __getitem__(self, idx):
         return self.formatted_dataset[idx]
-
-
 
 
 
@@ -313,12 +311,18 @@ if __name__=="__main__":
         tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
     tokenizer.padding_side = "right"
 
-    ## 모델
+    ## 학습 대상 모델
     model = load_base_model(args.base_model)
     model.resize_token_embeddings(len(tokenizer))
     model.config.pad_token_id = tokenizer.pad_token_id
     if args.model_path:
         model = load_peft_model(model, args.model_path)
+
+    ## reference 모델 설정
+    ref_model = copy.deepcopy(model)
+    for p in ref_model.parameters():
+        p.requires_grad = False
+    ref_model.eval()
 
     ## 디바이스
     rank, world_size = 0, 1
@@ -353,6 +357,14 @@ if __name__=="__main__":
     print('Model saving path: %s' % args.output_path)
 
 
+    # 학습 log 저장 ------------------------------------------------------------------------------------------------
+    log_path = os.path.join(args.output_path, "train_log.txt")
+    log_file = open(log_path, 'a', buffering=1, encoding='UTF-8')
+
+
+
+
+
     # GRPO 설정 및 트레이너 ------------------------------------------------------------------------------------------------
     training_args = GRPOConfig(
         output_dir=args.output_dir,
@@ -373,7 +385,8 @@ if __name__=="__main__":
         model=model,
         reward_funcs=partial(reward_sum, args),
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=hf_train_dataset,
+        processing_class=tokenizer,
         callbacks=[SaveEveryEpochCallback(training_args.output_dir)],
     )
 
