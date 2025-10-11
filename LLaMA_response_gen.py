@@ -95,7 +95,7 @@ def parse_args():
     print(args.home)
 
     if args.model_path != '':
-        args.model_path = os.path.join(args.home, 'model_weights', args.model_path)
+        args.model_path = os.path.join(args.home, args.model_path)
 
     return args
 
