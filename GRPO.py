@@ -45,12 +45,13 @@ def parse_args():
     parser.add_argument('--logging_steps', type=int, default=100)
     parser.add_argument('--step_size', type=int, default=300)
     parser.add_argument('--data_path', type=str, default="")
+    parser.add_argument('--traindata_len', type=int, default=1000)
+
 
     # GRPO config
     parser.add_argument('--num_generations', type=int, default=8)
     parser.add_argument('--max_completion_length', type=int, default=100)
     parser.add_argument('--temperature', type=float, default=1.0)
-    parser.add_argument('--top_p', type=float, default=1.0)
     parser.add_argument('--beta', type=float, default=0.0)
     parser.add_argument('--scale_rewards', type=str, default="group")
 
@@ -70,7 +71,7 @@ def parse_args():
     #
     # parser.add_argument('--access_token', type=str, default="")
     # parser.add_argument('--cnt', type=int, default=0)
-    # parser.add_argument('--log_name', type=str, default="")
+    parser.add_argument('--log_name', type=str, default="log_name")
 
     args = parser.parse_args()
 
@@ -109,6 +110,7 @@ def load_base_model(model_name, model_path=''):
         torch_dtype=torch.bfloat16,
         device_map="auto"
     )
+
     return base_model
 
 
@@ -147,6 +149,28 @@ class SaveEveryEpochCallback(TrainerCallback):
         peft_model.config.save_pretrained(path)
         print(f"Epoch {state.epoch} finished, saving model to {self.saved_model_path}")
 
+
+
+class StepSaveAndLogCallback(TrainerCallback):
+    def __init__(self, args, save_steps=100):
+        self.log_name = args.log_name
+        self.saved_model_path = args.output_path
+        self.no_save = getattr(args, "no_save", False)
+        self.save_steps = save_steps
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs["model"]
+
+        step = state.global_step
+
+        # 매 100스텝마다 저장
+        if step > 0 and step % self.save_steps == 0:
+            save_path = os.path.join(self.saved_model_path, f"{self.log_name}_S{step}")
+            if not self.no_save:
+                model.save_pretrained(save_path)
+                print(f"[INFO] Step {step}: model saved at {save_path}")
+
+
 # 디버깅용 ---------------------------------------------------------------------------------------------------------
 # ==== advantage 통계 찍기 ======
 class InspectAdvantagesCallback(TrainerCallback):
@@ -180,68 +204,38 @@ class GradSumCallback(TrainerCallback):
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
 
-class Dataset_processing(Dataset):
-    def __init__(self, args, json_dataset, tokenizer, instruction, rank, world_size, train_only_resp=False):
-        self.args = args
-        self.tokenizer = tokenizer
-        self.instruction = instruction
-        self.dataset = json_dataset
+def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, train_only_resp=False):
 
-        # dialog -> utterance 로 쪼개기
-        for data in self.dataset:
-            dialog = data['DIALOG'].split('\n')
-            context = []
-            for utt in dialog:
-                if "System: " in utt:
-                    utt = utt.split('System: ')[1].split('\n')[0]
-                    context.append({'role': "assistant", 'content': utt})
-                elif "User: " in utt:
-                    utt = utt.split('User: ')[1].split('\n')[0]
-                    context.append({'role': "user", 'content': utt})
-                else:
-                    print('ERROR')
-            data['DIALOG'] = context
-            
-            ###########################################
-            dialog = data['DIALOG'][-6:]
-            dialog.insert(0, {'role': 'system', 'content': self.instruction})
-            context = dialog
-            # original_context_len = len(
-            #     tokenizer.apply_chat_template(context[:-1], tokenize=True, add_generation_prompt=True))
-            formatted_context = self.tokenizer.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
-            data["prompt"] = formatted_context
+    # dialog -> utterance 로 쪼개기
+    for data in dataset:
+        dialog = data['DIALOG'].split('\n')
+        context = []
+        for utt in dialog:
+            if "System: " in utt:
+                utt = utt.split('System: ')[1].split('\n')[0]
+                context.append({'role': "assistant", 'content': utt})
+            elif "User: " in utt:
+                utt = utt.split('User: ')[1].split('\n')[0]
+                context.append({'role': "user", 'content': utt})
+            else:
+                print('ERROR')
+        data['DIALOG'] = context
+        
+        ###########################################
+        dialog = data['DIALOG'][-6:]
+        dialog.insert(0, {'role': 'system', 'content': instruction})
+        context = dialog
+        # original_context_len = len(
+        #     tokenizer.apply_chat_template(context[:-1], tokenize=True, add_generation_prompt=True))
+        formatted_context = tokenizer.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
+        data["prompt"] = formatted_context
 
-        # dataset format 맞추기
-        print("Dataset length: ", len(self.dataset))
+    # dataset format 맞추기
+    print("Dataset length: ", len(dataset))
 
-        random.shuffle(self.dataset)
-        data = self.dataset[rank::world_size]
+    random.shuffle(dataset)
 
-        # self.formatted_dataset = []
-        # for data in self.dataset:
-        #     dialog = data['DIALOG'][-6:]
-        #     dialog.insert(0, {'role': 'system', 'content': self.instruction})
-
-        #     context = dialog
-        #     # original_context_len = len(
-        #     #     tokenizer.apply_chat_template(context[:-1], tokenize=True, add_generation_prompt=True))
-        #     formatted_context = self.tokenizer.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
-        #     self.formatted_dataset.append({"prompt": formatted_context})
-        #     # formatted_context = self.tokenizer(formatted_context, padding='max_length', truncation=True, max_length=1024, return_tensors='pt')
-        #     # dialog_text = "\n".join([f"{i['role']}: {i['content']}" for i in data['dialog']])
-
-        #     # self.formatted_dataset.append({'input_ids': input_ids, "labels": labels})
-
-        # # self.tokenizer.apply_chat_template([{'role': 'system', 'content': instruction}] + inspired2_train[0]['dialog'], tokenize=True, padding=True, max_length=128, add_generation_prompt=True)
-
-    def __len__(self):
-        # 데이터 샘플 개수를 반환
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        return self.dataset[idx]
-
-
+    return dataset
 
 
 # reward function 모음 ------------------------------------------------------------------------------------------------
@@ -255,6 +249,7 @@ def make_reward_sum(args, log_file):
     
     
     def reward_sum(prompts=None, completions=None, **kwargs):
+        # print("Evaluating by GPT!")
         '''
         TRL이 호출하는 reward function. 각 completions에 대한 보상 리스트를 반환해야함.
         하나의 dialog에 대해 생성한 응답들 각각에 대한 평가 항목별 점수를 합하여 정규화한 점수들
@@ -263,11 +258,11 @@ def make_reward_sum(args, log_file):
         '''
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
         rewards = []
+        reward_coeff = [0.25, 0.25, 0.25, 0.25]
         for d in group_evaluations:
-            s = sum(float(d[k]) for k in ['informativeness', 'fluency', 'relevance', 'validity'])
+            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ['informativeness', 'fluency', 'relevance', 'validity']]
             # min-max normalization
-            r = (s-4.0) / 16.0
-            r = max(0.0, min(1.0, r))
+            r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
             rewards.append(r)
             
             
@@ -489,11 +484,10 @@ if __name__=="__main__":
         )
         model = get_peft_model(base_model, lora_cfg)
     
-    with torch.no_grad():
-        model.get_input_embeddings().weight.data = model.get_input_embeddings().weight.data.to(torch.float32)
-        model.get_output_embeddings().weight.data = model.get_output_embeddings().weight.data.to(torch.float32)
+    # with torch.no_grad():
+    #     model.get_input_embeddings().weight.data = model.get_input_embeddings().weight.data.to(torch.float32)
+    #     model.get_output_embeddings().weight.data = model.get_output_embeddings().weight.data.to(torch.float32)
 
-    
     # model = model.to(dtype=torch.bfloat16)
     # model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
@@ -541,10 +535,10 @@ if __name__=="__main__":
 
 
     ## reference 모델 설정 - 안씀
-    ref_model = copy.deepcopy(model)
-    for p in ref_model.parameters():
-        p.requires_grad = False
-    ref_model.eval()
+    # ref_model = copy.deepcopy(model)
+    # for p in ref_model.parameters():
+    #     p.requires_grad = False
+    # ref_model.eval()
 
     ## 디바이스
     rank, world_size = 0, 1
@@ -566,9 +560,9 @@ if __name__=="__main__":
     else:
         raise ValueError('Invalid data path')
 
-    dataset = Dataset_processing(args, train_dataset, tokenizer, instruction, rank, world_size)
-    hf_train_dataset = HFDataset.from_list(train_dataset[:500])
-    print('Dataset size:', len(dataset))
+    dataset = dataset_processing(args, train_dataset, tokenizer, instruction, rank, world_size)
+    hf_train_dataset = HFDataset.from_list(dataset[:args.traindata_len])
+    print('Dataset size:', len(hf_train_dataset))
 
 
     # 모델 저장 ---------------------------------------------------------------------------------------------------
@@ -578,6 +572,10 @@ if __name__=="__main__":
         os.mkdir(args.output_path)
     print('Model saving path: %s' % args.output_path)
 
+    # args.log_path = os.path.join(args.home, 'GRPO_log', f'{mdhm}')
+    # if not os.path.isdir(args.log_path):
+    #     os.mkdir(args.log_path)
+    # print('Model logging path: %s' % args.log_path)
 
     # 학습 log 저장 ------------------------------------------------------------------------------------------------
     log_path = os.path.join(args.output_path, f"GRPO_{mdhm}_train_log.txt")
@@ -589,23 +587,42 @@ if __name__=="__main__":
     reward_fn = make_reward_sum(args, log_file)
     # reward_fn = make_dummy_reward_sum(args)
     
-    # GRPO 설정 및 트레이너 ------------------------------------------------------------------------------------------------
+    # # GRPO 설정 및 트레이너 ------------------------------------------------------------------------------------------------
+    # training_args = GRPOConfig(
+    #     output_dir=args.output_path,
+    #     per_device_train_batch_size=args.batch_size,
+    #     gradient_accumulation_steps=args.gradient_accumulation_steps,
+    #     num_train_epochs=args.num_train_epochs,
+    #     learning_rate=args.learning_rate,
+    #     logging_steps=args.logging_steps,
+    #     # bf16=False, fp16=False,
+        
+    #     # GRPO 핵심 파라미터
+    #     # generation_batch_size=args.batch_size * args.num_generations,
+    #     num_generations=args.num_generations, # 하나의 input당 생성하는 응답 개수
+    #     max_completion_length=args.max_completion_length,
+    #     temperature=args.temperature,
+    #     #   top_p=args.top_p,
+    #     beta=args.beta, # ref 모델과의 KL에 적용되는 파라미터
+    #     scale_rewards=args.scale_rewards
+    # )
+
+    # Configure training arguments using GRPOConfig
     training_args = GRPOConfig(
         output_dir=args.output_path,
-        per_device_train_batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        per_device_train_batch_size = args.batch_size,
+        remove_unused_columns=False, # to access the solution column in accuracy_reward
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.num_train_epochs,
-        learning_rate=args.learning_rate,
-        logging_steps=args.logging_steps,
-        bf16=False, fp16=False,
-        
-        # GRPO 핵심 파라미터
-        generation_batch_size=args.batch_size * args.num_generations,
-        num_generations=args.num_generations, # 하나의 input당 생성하는 응답 개수
+        bf16=True,
+        logging_strategy="steps",  # 스텝 단위 로깅
+        logging_steps=100,         # 매 100스텝마다 log() 자동 호출
+        save_strategy="no",        # (원하면 따로 설정)
+        # Parameters that control de data preprocessing
         max_completion_length=args.max_completion_length,
-        temperature=args.temperature, top_p=args.top_p,
-        beta=args.beta, # ref 모델과의 KL에 적용되는 파라미터
-        scale_rewards=args.scale_rewards
+        num_generations=args.num_generations, # 하나의 input당 생성하는 응답 개수
+        max_prompt_length=512, # default: 512
     )
 
     trainer = GRPOTrainer(
@@ -614,11 +631,11 @@ if __name__=="__main__":
         args=training_args,
         train_dataset=hf_train_dataset,
         processing_class=tokenizer,
-        callbacks=[SaveEveryEpochCallback(training_args.output_dir)],
+        callbacks=[StepSaveAndLogCallback(args, save_steps=100)],
     )
 
 
-    print("[DEBUG] N =", len(hf_train_dataset))
+    print("[DEBUG] N =", len(dataset))
     print("[DEBUG] batch_size =", args.batch_size)
     print("[DEBUG] epochs =", args.num_train_epochs)
     print("[DEBUG] grad_accum =", args.gradient_accumulation_steps)
