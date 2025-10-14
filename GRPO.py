@@ -46,6 +46,7 @@ def parse_args():
     parser.add_argument('--step_size', type=int, default=300)
     parser.add_argument('--data_path', type=str, default="")
     parser.add_argument('--traindata_len', type=int, default=1000)
+    parser.add_argument('--no_shuffle', action='store_true')
 
 
     # GRPO config
@@ -233,7 +234,13 @@ def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, 
     # dataset format 맞추기
     print("Dataset length: ", len(dataset))
 
-    random.shuffle(dataset)
+
+    if args.no_shuffle:
+        print(dataset[0])
+        pass
+
+    else:
+        random.shuffle(dataset)
 
     return dataset
 
@@ -617,7 +624,7 @@ if __name__=="__main__":
         num_train_epochs=args.num_train_epochs,
         bf16=True,
         logging_strategy="steps",  # 스텝 단위 로깅
-        logging_steps=100,         # 매 100스텝마다 log() 자동 호출
+        logging_steps=1,         # 매 100스텝마다 log() 자동 호출
         save_strategy="no",        # (원하면 따로 설정)
         # Parameters that control de data preprocessing
         max_completion_length=args.max_completion_length,
@@ -635,15 +642,15 @@ if __name__=="__main__":
     )
 
 
-    print("[DEBUG] N =", len(dataset))
-    print("[DEBUG] batch_size =", args.batch_size)
-    print("[DEBUG] epochs =", args.num_train_epochs)
-    print("[DEBUG] grad_accum =", args.gradient_accumulation_steps)
+    # print("[DEBUG] N =", len(dataset))
+    # print("[DEBUG] batch_size =", args.batch_size)
+    # print("[DEBUG] epochs =", args.num_train_epochs)
+    # print("[DEBUG] grad_accum =", args.gradient_accumulation_steps)
 
-    dl = DataLoader(hf_train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=False)
-    print("[DEBUG] batches_per_epoch =", len(dl))
-    expected = math.ceil(len(hf_train_dataset) / args.batch_size) * args.num_train_epochs // max(1, args.gradient_accumulation_steps)
-    print("[DEBUG] expected_global_steps =", expected)
+    # dl = DataLoader(hf_train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=False)
+    # print("[DEBUG] batches_per_epoch =", len(dl))
+    # expected = math.ceil(len(hf_train_dataset) / args.batch_size) * args.num_train_epochs // max(1, args.gradient_accumulation_steps)
+    # print("[DEBUG] expected_global_steps =", expected)
 
     
     print("🚀 GRPO 학습 시작")
