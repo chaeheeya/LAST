@@ -267,8 +267,8 @@ def make_reward_sum(args, log_file):
         :param group_evaluations:
         :return: List[float]
         '''
-        reward_coeff = [float(i.strip()) for i in args.reward_coeff]
-        print(f'reward coeff: {reward_coeff}')
+        reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+        # print(f'reward coeff: {reward_coeff}')
         
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
         rewards = []
@@ -575,6 +575,7 @@ if __name__=="__main__":
 
     dataset = dataset_processing(args, train_dataset, tokenizer, instruction, rank, world_size)
     hf_train_dataset = HFDataset.from_list(dataset[:args.traindata_len])
+
     print('Dataset size:', len(hf_train_dataset))
 
 
@@ -598,6 +599,10 @@ if __name__=="__main__":
     
     # reward function 설정하기 -------------------------------------------------------------------------------------------
     reward_fn = make_reward_sum(args, log_file)
+    reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+    print(f'reward coeff: {reward_coeff}')
+
+
     # reward_fn = make_dummy_reward_sum(args)
     
     # # GRPO 설정 및 트레이너 ------------------------------------------------------------------------------------------------
@@ -630,7 +635,7 @@ if __name__=="__main__":
         num_train_epochs=args.num_train_epochs,
         bf16=True,
         logging_strategy="steps",  # 스텝 단위 로깅
-        logging_steps=1,         # 매 100스텝마다 log() 자동 호출
+        logging_steps=100,         # 매 100스텝마다 log() 자동 호출
         save_strategy="no",        # (원하면 따로 설정)
         # Parameters that control de data preprocessing
         max_completion_length=args.max_completion_length,
