@@ -57,6 +57,10 @@ def parse_args():
     parser.add_argument('--scale_rewards', type=str, default="group")
 
 
+    # reward
+    parser.add_argument('--reward_coeff', type=str, default="0.25, 0.25, 0.25, 0.25")
+
+
 
     # # Generation
     # parser.add_argument('--max_new_tokens', type=int, default=100)
@@ -263,9 +267,11 @@ def make_reward_sum(args, log_file):
         :param group_evaluations:
         :return: List[float]
         '''
+        reward_coeff = [float(i.strip()) for i in args.reward_coeff]
+        print(f'reward coeff: {reward_coeff}')
+        
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
         rewards = []
-        reward_coeff = [0.25, 0.25, 0.25, 0.25]
         for d in group_evaluations:
             s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ['informativeness', 'fluency', 'relevance', 'validity']]
             # min-max normalization
