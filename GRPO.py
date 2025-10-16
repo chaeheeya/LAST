@@ -25,6 +25,7 @@ from tqdm import tqdm
 from datetime import datetime
 from pytz import timezone
 
+from prompt_template import EVAL_only_response
 
 # -------------------------------------------------------------------------------------------
 
@@ -59,6 +60,7 @@ def parse_args():
 
     # reward
     parser.add_argument('--reward_coeff', type=str, default="0.25, 0.25, 0.25, 0.25")
+    parser.add_argument('--eval_prompt', type=str)
 
 
 
@@ -270,10 +272,19 @@ def make_reward_sum(args, log_file):
         reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
         # print(f'reward coeff: {reward_coeff}')
         
+        item_evaluations = []
+        for topic, resp in zip(kwargs['TOPIC'], completions):
+            if topic in resp:
+                item_evaluations.append(1.0)
+            else:
+                item_evaluations.append(0.0)
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        
         rewards = []
-        for d in group_evaluations:
-            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ['informativeness', 'fluency', 'relevance', 'validity']]
+
+        for d, i in zip(group_evaluations, item_evaluations):
+            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in list(group_evaluations[0].keys())]
+            s.append(i)
             # min-max normalization
             r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
             rewards.append(r)
@@ -297,7 +308,9 @@ def make_reward_sum(args, log_file):
                 log_file.write("----------------------------------------\n")
                 log_file.write(f"[Completion {k}]\n")
                 log_file.write((f"System: {completions[j]}" or "") + "\n")
-                log_file.write("### gpt reward: " + json.dumps(group_evaluations[j], ensure_ascii=False) + "\n")
+                
+                group_evaluations[j]['accuracy'] = item_evaluations[j]
+                log_file.write("### reward by metric: " + json.dumps(group_evaluations[j], ensure_ascii=False) + "\n")
                 log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
             log_file.flush()
             idx = end
@@ -330,8 +343,8 @@ def gpt_eval(args, prompts: List[str], completions: List[str]):
 
     client = OpenAI(api_key=args.access_token)
 
-    REQUIRED_KEYS = {"validity", "informativeness", "fluency", "relevance"}
-    NEUTRAL = {"validity": 3, "informativeness": 3, "fluency": 3, "relevance": 3}  # 항상 반환 강제 시 사용할 중립 점수
+    REQUIRED_KEYS = {"informativeness", "fluency", "relevance"}
+    NEUTRAL = {"informativeness": 3, "fluency": 3, "relevance": 3}  # 항상 반환 강제 시 사용할 중립 점수
     MAX_RETRIES = 5
     BASE_BACKOFF = 0.6
     JITTER = 0.2
@@ -344,15 +357,10 @@ Dialog:
 Response:
 %s
 
-Evaluate the response along two dimensions: (A) Recommendation Quality and (B) Explanation Quality.
-
-A. Recommendation Quality
-1) Validity: Does the recommended item align with the user’s preferences expressed in the dialog?
-
-B. Explanation Quality
-1) Informativeness: Does the explanation incorporate rich and meaningful knowledge about the item?
+Evaluate the response along explanation quality.
+1) Informativeness: Does the explanation incorporate rich and meaningful knowledge about the recommended item?
 2) Fluency: Is the explanation natural, coherent, and expressed with varied wording?
-3) Relevance: Does the explanation highlight item features that are directly relevant to the dialog context?
+3) Relevance: Does the explanation highlight the features of the recommended item that are directly relevant to the dialog context?
 
 Scoring: Use a 1–5 scale for each criterion.
 - 1 point: Very poor. Fails almost entirely to meet the criterion.
@@ -363,7 +371,7 @@ Scoring: Use a 1–5 scale for each criterion.
 
 Output format:
 <think>reasoning process here</think>
-<answer>{"validity": <1–5>, "informativeness": <1–5>, "fluency": <1–5>, "relevance": <1–5>}</answer>"""
+<answer>{"informativeness": <1–5>, "fluency": <1–5>, "relevance": <1–5>}</answer>"""
 
 
     def _extract_between(text: str, start_tag="<answer>", end_tag="</answer>") -> str:
