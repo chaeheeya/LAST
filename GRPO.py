@@ -283,7 +283,7 @@ def make_reward_sum(args, log_file):
         rewards = []
 
         for d, i in zip(group_evaluations, item_evaluations):
-            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in list(group_evaluations[0].keys())]
+            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
             s.append(i)
             # min-max normalization
             r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
@@ -291,6 +291,7 @@ def make_reward_sum(args, log_file):
             
             
         #-------- txt 파일로 로그 저장하기 -------
+        metrics = ["informativeness", "fluency", "relevance", "accuracy"]
         B = len(prompts)//args.num_generations if prompts is not None else 0
         G = int(args.num_generations)
         idx = 0
@@ -310,7 +311,10 @@ def make_reward_sum(args, log_file):
                 log_file.write((f"System: {completions[j]}" or "") + "\n")
                 
                 group_evaluations[j]['accuracy'] = item_evaluations[j]
-                log_file.write("### reward by metric: " + json.dumps(group_evaluations[j], ensure_ascii=False) + "\n")
+                temp = {}
+                for k in metrics:
+                    temp[k] = group_evaluations[j][k]
+                log_file.write("### reward by metric: " + json.dumps(temp, ensure_ascii=False) + "\n")
                 log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
             log_file.flush()
             idx = end
