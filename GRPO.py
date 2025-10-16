@@ -274,14 +274,18 @@ def make_reward_sum(args, log_file):
         
         item_evaluations = []
         for topic, resp in zip(kwargs['TOPIC'], completions):
-            if topic in resp:
+            
+            pattern = r'\(\d+\)'
+            match = re.search(pattern, topic)
+            name = topic[:match.start()].strip()
+
+            if name in resp:
                 item_evaluations.append(1.0)
             else:
                 item_evaluations.append(0.0)
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
         
         rewards = []
-
         for d, i in zip(group_evaluations, item_evaluations):
             s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
             s.append(i)
