@@ -1,4 +1,4 @@
-import os
+import os, re
 import json
 import pickle
 import copy
