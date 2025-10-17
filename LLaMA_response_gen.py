@@ -18,6 +18,12 @@ from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
 
+instruction_with_target = '''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
 
 class Dataset_processing(Dataset):
     def __init__(self, args, train_dataset, test_dataset, tokenizer, instruction):
@@ -77,12 +83,14 @@ class Dataset_processing(Dataset):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default="train")
-    parser.add_argument('--lora_weights', type=str, default=None)
-    parser.add_argument('--access_token', type=str, default="")
-    parser.add_argument('--cnt', type=int, default=0)
-    parser.add_argument('--log_name', type=str, default="")
     parser.add_argument('--batch_size', type=int, default=2)
+
     parser.add_argument('--model_path', type=str, default="")
+
+    parser.add_argument('--log_name', type=str, default="")
+    
+    # Generation config
+    parser.add_argument('--num_beams', type=int, default=1)
     parser.add_argument('--max_new_tokens', type=int, default=100)
 
     args = parser.parse_args()
@@ -160,18 +168,28 @@ if __name__ == '__main__':
     model = load_base_model("meta-llama/Llama-3.1-8B-Instruct")
     model.resize_token_embeddings(len(tokenizer))
     model.config.pad_token_id = tokenizer.pad_token_id
+    
     if args.model_path:
         model = load_peft_model(model, args.model_path)
-        model_name_for_file = args.model_path.replace('/', '-')
 
-    mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
+    if args.log_name:
+        generation_file_name = args.log_name
+    else:
+        if args.model_path:
+            generation_file_name = args.model_path.split(args.home)[-1].strip().split('/')[-1].replace('/', '-')
+        else:
+            generation_file_name = ''
+
+
     
-
+    mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
     result_path = os.path.join(args.home, 'response_gen')
     if not os.path.isdir(result_path):
         os.mkdir(result_path)
-    json_path = os.path.join(result_path, f'{model_name_for_file}_inspired2_LLaMA-3.1-response.json')
+    json_path = os.path.join(result_path, f'{mdhm}_{generation_file_name}_inspired2_LLaMA-3.1-response.json')
     json_file = open(json_path, 'a', buffering=1, encoding='UTF-8')
+    print('save path: ', json_path)
+
 
     rank, world_size = 0, 1
     if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -182,7 +200,7 @@ if __name__ == '__main__':
     inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
     inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
 
-    dataset = Dataset_processing(args, inspired2_train, inspired2_test, tokenizer, instruction)
+    dataset = Dataset_processing(args, inspired2_train, inspired2_test, tokenizer, instruction_with_target)
     dataset_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     step = 1
@@ -194,7 +212,7 @@ if __name__ == '__main__':
         attention_mask = inputs['attention_mask'].to(device)
 
         generation_config = GenerationConfig(
-            num_beams=1
+            num_beams=args.num_beams
         )
 
         with torch.no_grad():
