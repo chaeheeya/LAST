@@ -1,4 +1,4 @@
-import os, re
+import os, re, unicodedata
 import json
 import pickle
 import copy
@@ -251,6 +251,23 @@ def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, 
     return dataset
 
 
+# target item 매칭
+TRANS = {
+    ord('’'): "'", ord('‘'): "'",
+    ord('“'): '"', ord('”'): '"',
+    ord('–'): '-', ord('—'): '-', ord('−'): '-',   # en/em dash, minus
+    ord('\u00A0'): ' ',                            # nbsp
+    ord('\u200B'): None, ord('\u200C'): None, ord('\u200D'): None,  # zero-width
+}
+
+def normalize_for_match(s: str) -> str:
+    s = unicodedata.normalize('NFKC', s)  # 유니코드 정규화
+    s = s.translate(TRANS)                # 스마트 따옴표/대시 정리
+    s = re.sub(r'\s+', ' ', s).strip()    # 공백 정리
+    return s.casefold()
+
+
+
 # reward function 모음 ------------------------------------------------------------------------------------------------
 
 # ------ dialog 저장 --------
@@ -275,11 +292,11 @@ def make_reward_sum(args, log_file):
         item_evaluations = []
         for topic, resp in zip(kwargs['TOPIC'], completions):
             
-            pattern = r'\(\d+\)'
-            match = re.search(pattern, topic)
-            name = topic[:match.start()].strip()
+            # pattern = r'\(\d+\)'
+            # match = re.search(pattern, topic)
+            # name = topic[:match.start()].strip()
 
-            if name in resp:
+            if normalize_for_match(topic) in normalize_for_match(resp):
                 item_evaluations.append(1.0)
             else:
                 item_evaluations.append(0.0)

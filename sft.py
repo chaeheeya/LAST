@@ -35,21 +35,24 @@ from pytz import timezone
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
 
+instruction_with_target = '''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
+
 
 class QueryEvalCallback(TrainerCallback):
     def __init__(self, output_dir):
         self.saved_model_path = output_dir
 
     def on_epoch_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        wrapper_model = kwargs['model']  # 전체 wrapper 모델
-        peft_model = wrapper_model.model  # PEFT 모델 내부
+        model = kwargs['model']  
         epoch = state.epoch
         path = os.path.join(self.saved_model_path, f'E{round(epoch)}')
 
-        # 1. PEFT LoRA 파라미터만 저장
-        peft_model.save_pretrained(path)
-        # 3. config도 같이 저장
-        peft_model.config.save_pretrained(path)
+        model.save_pretrained(path)
         print(f"Epoch {state.epoch} finished, saving model to {self.saved_model_path}")
 
 
@@ -159,7 +162,7 @@ def parse_args():
     print(args.home)
 
     if args.model_path != '':
-        args.model_path = os.path.join(args.home, 'model_weights', args.model_path)
+        args.model_path = os.path.join(args.home, 'sft_model', args.model_path)
 
     return args
 
@@ -263,15 +266,7 @@ def main(args):
     #     name=args.log_name,           # 실험 run 이름
     # )
 
-    # LoRA Configuration
-    lora_config = LoraConfig(
-        r=64,
-        lora_alpha=16,
-        target_modules=["q_proj", "v_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM,
-    )
+    
 
     rank, world_size = 0, 1
     if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -283,7 +278,7 @@ def main(args):
     dataset_path = os.path.join(args.home, 'dataset', 'sft_train', args.train_data)
     dataset = json.load(open(dataset_path, 'r', encoding='utf-8'))
 
-    train_dataset = Dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, train_only_resp=args.train_only_response)
+    train_dataset = Dataset_processing(args, dataset, tokenizer, instruction_with_target, rank, world_size, train_only_resp=args.train_only_response)
     # dataset_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Logging 설정
@@ -366,12 +361,7 @@ def main(args):
     tokenizer.save_pretrained(model_path)
     print("✅ tokenizer 저장됨", flush=True)
 
-    # # 모델 merge 및 저장 (LoRA → base weights에 합치기)
-    # merged_model = model.merge_and_unload()
-    # merged_model.save_pretrained(model_path + "_merged")
-    # tokenizer.save_pretrained(model_path + "_merged")
-    # logging.info("✅ Merge된 모델 저장 완료")
-    #ckckckckck
+
 
 if __name__ == "__main__":
     args = parse_args()
