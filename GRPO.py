@@ -211,6 +211,13 @@ class GradSumCallback(TrainerCallback):
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
 
+instruction_with_target = '''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
+
 def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, train_only_resp=False):
 
     # dialog -> utterance 로 쪼개기
@@ -606,7 +613,7 @@ if __name__=="__main__":
     else:
         raise ValueError('Invalid data path')
 
-    dataset = dataset_processing(args, train_dataset, tokenizer, instruction, rank, world_size)
+    dataset = dataset_processing(args, train_dataset, tokenizer, instruction_with_target, rank, world_size)
     hf_train_dataset = HFDataset.from_list(dataset[:args.traindata_len])
 
     print('Dataset size:', len(hf_train_dataset))
