@@ -59,6 +59,7 @@ def parse_args():
 
 
     # reward
+    parser.add_argument('--reward_fn', type=str, default="make_sum") 
     parser.add_argument('--reward_coeff', type=str, default="0.25, 0.25, 0.25, 0.25")
     parser.add_argument('--eval_prompt', type=str)
 
@@ -215,6 +216,8 @@ instruction_with_target = '''Pretend you are a conversational recommender system
 I will provide you a dialog between a user and the system. 
 Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
 
+The recommended item and response are enclosed within <item></item> and <answer></answer> tags, respectively, i.e., <item>recommended item here</item>\n<answer>response here</answer>
+
 When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
 The generated response should not exceed 100 tokens.'''
 
@@ -302,8 +305,14 @@ def make_reward_sum(args, log_file):
             # pattern = r'\(\d+\)'
             # match = re.search(pattern, topic)
             # name = topic[:match.start()].strip()
+            if '<item>' in resp:
+                rec_item = resp.split('<item>')[-1].split('</item>')[0].strip()
+                if '</item>' not in resp:
+                    rec_item = rec_item.split('<answer>')[0].strip()
+            else:
+                rec_item = resp.split('</item>')[0].split('<answer>')[0].strip()
 
-            if normalize_for_match(topic) in normalize_for_match(resp):
+            if normalize_for_match(topic) in normalize_for_match(rec_item):
                 item_evaluations.append(1.0)
             else:
                 item_evaluations.append(0.0)
@@ -368,6 +377,63 @@ def make_dummy_reward_sum(args):
     dummy_reward.__name__="reward_sum"
     return dummy_reward
 
+
+def make_reward_acc(args, log_file):
+    
+    # state = {"dialog_counter": 0}
+    def reward_sum(prompts=None, completions=None, **kwargs):
+
+        item_evaluations = []
+        for topic, resp in zip(kwargs['TOPIC'], completions):
+            
+            # pattern = r'\(\d+\)'
+            # match = re.search(pattern, topic)
+            # name = topic[:match.start()].strip()
+            if '<item>' in resp:
+                rec_item = resp.split('<item>')[-1].split('</item>')[0].strip()
+                if '</item>' not in resp:
+                    rec_item = rec_item.split('<answer>')[0].strip()
+            else:
+                rec_item = resp.split('</item>')[0].split('<answer>')[0].strip()
+
+            if normalize_for_match(topic) in normalize_for_match(rec_item):
+                item_evaluations.append(1.0)
+            else:
+                item_evaluations.append(0.0)
+        
+        rewards = []
+        for acc in item_evaluations:
+            rewards.append(acc)
+            
+            
+        #-------- txt 파일로 로그 저장하기 -------
+        metrics = ["accuracy"]
+        B = len(prompts)//args.num_generations if prompts is not None else 0
+        G = int(args.num_generations)
+        idx = 0
+        
+        for b in range(B):
+            dialog_id = next(DIALOG_ID_GEN)
+            start = idx
+            end = min(start+G, len(completions))
+            
+            log_file.write(f"\n====================== Dialog {dialog_id} ======================\n")
+            log_file.write("[Dialog]\n")
+            log_file.write((prompts[b*args.num_generations] or "") + "\n\n")
+            
+            for k, j in enumerate(range(start, end), start=1):
+                log_file.write("----------------------------------------\n")
+                log_file.write(f"[Completion {k}]\n")
+                log_file.write((f"System: {completions[j]}" or "") + "\n")
+
+                log_file.write("### reward by metric: " + json.dumps({'accuracy': item_evaluations[j]}, ensure_ascii=False) + "\n")
+                log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
+            log_file.flush()
+            idx = end
+
+        return rewards
+    reward_sum.__name__="reward_sum"
+    return reward_sum
 
 
 # GPT Eval 호출 ------------------------------------------------------------------------------------------------------
@@ -476,8 +542,11 @@ Output format:
         
         dialog = _convert_special_to_dialog(dialog)
         dialogs.append(dialog)
-        if not response.startswith('System: '):
-            response = f'System: {response}'
+
+        if '<answer>' in response:
+            response = response.split('<answer>')[-1].split('</answer>')[0].strip()
+            if not response.startswith('System:'):
+                response = f'System: {response}'
         
         instruction = EVAL_PROMPT % (dialog, response)
         eval_score = None
@@ -638,6 +707,10 @@ if __name__=="__main__":
 
     
     # reward function 설정하기 -------------------------------------------------------------------------------------------
+    # if 'make_sum' in args.reward_fn:
+    #     reward_fn = make_reward_sum(args, log_file)
+    # elif 'acc_only' in args.reward_fn:
+    #     reward_fn = make_reward_acc(args, log_file)
     reward_fn = make_reward_sum(args, log_file)
     reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
     print(f'reward coeff: {reward_coeff}')
