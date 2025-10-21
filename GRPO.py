@@ -252,7 +252,7 @@ def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, 
 
 
     if args.no_shuffle:
-        print(dataset[0])
+        # print(dataset[0])
         pass
 
     else:
@@ -299,24 +299,26 @@ def make_reward_sum(args, log_file):
         reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
         # print(f'reward coeff: {reward_coeff}')
         
+        group_evaluations, dialogs = gpt_eval(args, prompts, completions)
         item_evaluations = []
         for topic, resp in zip(kwargs['TOPIC'], completions):
             
             # pattern = r'\(\d+\)'
             # match = re.search(pattern, topic)
             # name = topic[:match.start()].strip()
-            if '<item>' in resp:
-                rec_item = resp.split('<item>')[-1].split('</item>')[0].strip()
-                if '</item>' not in resp:
-                    rec_item = rec_item.split('<answer>')[0].strip()
-            else:
-                rec_item = resp.split('</item>')[0].split('<answer>')[0].strip()
 
-            if normalize_for_match(topic) in normalize_for_match(rec_item):
-                item_evaluations.append(1.0)
+            required_tags = ['<item>', '</item>']
+
+            rec_item = resp.split('<answer>')[0].split('</item>')[0].split('<item>')[-1].strip()
+
+            if normalize_for_match(topic) == normalize_for_match(rec_item):
+                if not all(t in resp['OUTPUT'] for t in required_tags):
+                    item_evaluations.append(0.0)
+                else:
+                    item_evaluations.append(1.0)
             else:
                 item_evaluations.append(0.0)
-        group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+
         
         rewards = []
         for d, i in zip(group_evaluations, item_evaluations):
@@ -543,10 +545,9 @@ Output format:
         dialog = _convert_special_to_dialog(dialog)
         dialogs.append(dialog)
 
-        if '<answer>' in response:
-            response = response.split('<answer>')[-1].split('</answer>')[0].strip()
-            if not response.startswith('System:'):
-                response = f'System: {response}'
+        response = response.split('<item>')[-1].split('</item')[-1].split('<answer>')[-1].split('</answer>')[0].strip()
+        if not response.startswith('System:'):
+            response = f'System: {response}'
         
         instruction = EVAL_PROMPT % (dialog, response)
         eval_score = None
