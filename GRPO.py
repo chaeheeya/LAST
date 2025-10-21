@@ -312,7 +312,7 @@ def make_reward_sum(args, log_file):
             rec_item = resp.split('<answer>')[0].split('</item>')[0].split('<item>')[-1].strip()
 
             if normalize_for_match(topic) == normalize_for_match(rec_item):
-                if not all(t in resp['OUTPUT'] for t in required_tags):
+                if not all(t in resp for t in required_tags):
                     item_evaluations.append(0.0)
                 else:
                     item_evaluations.append(1.0)
