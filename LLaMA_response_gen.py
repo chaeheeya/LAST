@@ -22,6 +22,8 @@ instruction_with_target = '''Pretend you are a conversational recommender system
 I will provide you a dialog between a user and the system. 
 Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
 
+The recommended item and response are enclosed within <item></item> and <answer></answer> tags, respectively, i.e., <item>recommended item here</item>\n<answer>response here</answer>
+
 When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
 The generated response should not exceed 100 tokens.'''
 
@@ -61,7 +63,7 @@ class Dataset_processing(Dataset):
         self.formatted_dataset = []
         for data in dataset:
             formatted_context = self.tokenizer.apply_chat_template(
-                [{'role': 'system', 'content': self.instruction}] + data['dialog'][-5:],
+                [{'role': 'system', 'content': self.instruction}] + data['dialog'][-6:],
                 tokenize=False,
                 add_generation_prompt=True)
             # formatted_context = self.tokenizer(formatted_context, padding='max_length', truncation=True, max_length=1024, return_tensors='pt')
