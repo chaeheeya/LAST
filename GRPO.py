@@ -300,6 +300,7 @@ def make_reward_sum(args, log_file):
         # print(f'reward coeff: {reward_coeff}')
         
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        target_items = []
         item_evaluations = []
         for topic, resp in zip(kwargs['TOPIC'], completions):
             
@@ -308,6 +309,7 @@ def make_reward_sum(args, log_file):
             # name = topic[:match.start()].strip()
 
             required_tags = ['<item>', '</item>']
+            target_items.append(topic)
 
             rec_item = resp.split('<answer>')[0].split('</item>')[0].split('<item>')[-1].strip()
 
@@ -355,6 +357,7 @@ def make_reward_sum(args, log_file):
                     temp[k] = group_evaluations[j][k]
                 log_file.write("### reward by metric: " + json.dumps(temp, ensure_ascii=False) + "\n")
                 log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
+            log_file.write(f"[Target]: {target_items[b]}\n")
             log_file.flush()
             idx = end
         
