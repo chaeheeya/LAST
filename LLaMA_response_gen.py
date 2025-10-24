@@ -59,6 +59,24 @@ class Dataset_processing(Dataset):
         elif self.args.dataset == 'test':
             dataset = self.test_dataset
 
+        if self.args.temp_data:
+            dataset = json.load(open('/home/user/chaehee/LAST/dataset/GRPO_train_base/GRPO_1022100927_train_log_balance_data_w_topic.json', 'r', encoding='utf-8'))
+
+            for data in dataset:
+                dialog = data['dialog'].split('\n')
+                context = []
+                for utt in dialog:
+                    if "System: " in utt:
+                        utt = utt.split('System: ')[1].split('\n')[0]
+                        context.append({'role': "assistant", 'content': utt})
+                    elif "User: " in utt:
+                        utt = utt.split('User: ')[1].split('\n')[0]
+                        context.append({'role': "user", 'content': utt})
+                    else:
+                        print('ERROR')
+                data['dialog'] = context
+
+
         print("Dataset length: ", len(dataset))
         self.formatted_dataset = []
         for data in dataset:
@@ -69,7 +87,7 @@ class Dataset_processing(Dataset):
             # formatted_context = self.tokenizer(formatted_context, padding='max_length', truncation=True, max_length=1024, return_tensors='pt')
             dialog_text = "\n".join([f"{i['role']}: {i['content']}" for i in data['dialog']])
             self.formatted_dataset.append(
-                {'formatted_context': formatted_context, 'dialog': dialog_text, 'response': data['response']})
+                {'formatted_context': formatted_context, 'dialog': dialog_text})
 
         # self.tokenizer.apply_chat_template([{'role': 'system', 'content': instruction}] + inspired2_train[0]['dialog'], tokenize=True, padding=True, max_length=128, add_generation_prompt=True)
 
@@ -94,6 +112,8 @@ def parse_args():
     # Generation config
     parser.add_argument('--num_beams', type=int, default=1)
     parser.add_argument('--max_new_tokens', type=int, default=100)
+    
+    parser.add_argument('--temp_data', action='store_true')
 
     args = parser.parse_args()
 
@@ -182,7 +202,7 @@ if __name__ == '__main__':
         else:
             generation_file_name = ''
 
-
+    model.eval()
     
     mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
     result_path = os.path.join(args.home, 'response_gen')
