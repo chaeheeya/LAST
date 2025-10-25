@@ -445,7 +445,7 @@ def make_reward_sum_acc_sim(args, log_file, cos, item2idx):
         
         i, j = item2idx[normalize_for_match(item1_name)], item2idx[normalize_for_match(item2_name)]
         return float(cos[i][j])
-
+        
 
     
     def reward_sum(prompts=None, completions=None, **kwargs):
