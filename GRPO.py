@@ -6,6 +6,7 @@ import math
 import time
 import random
 import argparse
+import numpy as np
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -62,23 +63,15 @@ def parse_args():
     parser.add_argument('--reward_fn', type=str, default="make_sum") 
     parser.add_argument('--reward_coeff', type=str, default="0.25, 0.25, 0.25, 0.25")
     parser.add_argument('--eval_prompt', type=str)
-
-
-
-    # # Generation
-    # parser.add_argument('--max_new_tokens', type=int, default=100)
-    # parser.add_argument('--num_beams', type=int, default=1)
-    # parser.add_argument('--do_sample', action='store_true')
-    # parser.add_argument('--temperature', type=float, default=1.0)
-    # parser.add_argument('--top_k', type=int, default=50)
+    parser.add_argument('--cos_path', type=str, default='')
+    parser.add_argument('--items_path', type=str, default='')
+    
 
     # Train
     parser.add_argument('--deepspeed', type=str, default='')
     parser.add_argument('--local_rank', type=int, default=-1)
 
-    #
-    # parser.add_argument('--access_token', type=str, default="")
-    # parser.add_argument('--cnt', type=int, default=0)
+
     parser.add_argument('--log_name', type=str, default="log_name")
 
     args = parser.parse_args()
@@ -441,6 +434,106 @@ def make_reward_acc(args, log_file):
     return reward_sum
 
 
+def make_reward_sum_acc_sim(args, log_file, cos, item2idx):
+    
+    # state = {"dialog_counter": 0}
+    def find_sim_score(item1_name, item2_name):
+        if normalize_for_match(item1_name) not in item2idx:
+            return 0.0
+        if normalize_for_match(item2_name) not in item2idx:
+            return 0.0
+        
+        i, j = item2idx[normalize_for_match(item1_name)], item2idx[normalize_for_match(item2_name)]
+        return float(cos[i][j])
+
+
+    
+    def reward_sum(prompts=None, completions=None, **kwargs):
+        # print("Evaluating by GPT!")
+        '''
+        TRL이 호출하는 reward function. 각 completions에 대한 보상 리스트를 반환해야함.
+        하나의 dialog에 대해 생성한 응답들 각각에 대한 평가 항목별 점수를 합하여 정규화한 점수들
+        이때, acc 지표는 0/1 이 아닌 recommended item과 target item 사이의 cosine_sim을 기준으로 점수를 받음 
+        :param group_evaluations:
+        :return: List[float]
+        '''
+        reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+        # print(f'reward coeff: {reward_coeff}')
+        
+        group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        target_items = []
+        item_evaluations = []
+        for topic, resp in zip(kwargs['TOPIC'], completions):
+            
+            # pattern = r'\(\d+\)'
+            # match = re.search(pattern, topic)
+            # name = topic[:match.start()].strip()
+
+            required_tags = ['<item>', '</item>']
+            target_items.append(topic)
+
+            rec_item = resp.split('<answer>')[0].split('</item>')[0].split('<item>')[-1].strip()
+
+            if all(t in resp for t in required_tags):
+                score = find_sim_score(rec_item, topic)
+                item_evaluations.append(score)
+            else:
+                item_evaluations.append(0.0)
+            
+            # if normalize_for_match(topic) == normalize_for_match(rec_item):
+            #     if not all(t in resp for t in required_tags):
+            #         item_evaluations.append(0.0)
+            #     else:
+            #         item_evaluations.append(1.0)
+            # else:
+            #     item_evaluations.append(0.0)
+
+        
+        rewards = []
+        for d, i in zip(group_evaluations, item_evaluations):
+            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
+            s.append(i)
+            # min-max normalization
+            r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
+            rewards.append(r)
+            
+            
+        #-------- txt 파일로 로그 저장하기 -------
+        metrics = ["informativeness", "fluency", "relevance", "accuracy"]
+        B = len(prompts)//args.num_generations if prompts is not None else 0
+        G = int(args.num_generations)
+        idx = 0
+        
+        for b in range(B):
+            dialog_id = next(DIALOG_ID_GEN)
+            start = idx
+            end = min(start+G, len(completions))
+            
+            log_file.write(f"\n====================== Dialog {dialog_id} ======================\n")
+            log_file.write("[Dialog]\n")
+            log_file.write((dialogs[b*args.num_generations] or "") + "\n\n")
+            
+            for k, j in enumerate(range(start, end), start=1):
+                log_file.write("----------------------------------------\n")
+                log_file.write(f"[Completion {k}]\n")
+                log_file.write((f"System: {completions[j]}" or "") + "\n")
+                
+                group_evaluations[j]['accuracy'] = item_evaluations[j]
+                temp = {}
+                for k in metrics:
+                    temp[k] = group_evaluations[j][k]
+                log_file.write("### reward by metric: " + json.dumps(temp, ensure_ascii=False) + "\n")
+                log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
+            log_file.write(f"[Target]: {target_items[b]}\n")
+            log_file.flush()
+            idx = end
+        
+        return rewards
+    reward_sum.__name__="reward_sum"
+    return reward_sum
+
+
+
 # GPT Eval 호출 ------------------------------------------------------------------------------------------------------
 def gpt_eval(args, prompts: List[str], completions: List[str]):
 
@@ -715,7 +808,22 @@ if __name__=="__main__":
     #     reward_fn = make_reward_sum(args, log_file)
     # elif 'acc_only' in args.reward_fn:
     #     reward_fn = make_reward_acc(args, log_file)
-    reward_fn = make_reward_sum(args, log_file)
+    
+    if 'acc_sim' in args.reward_fn:
+        args.cos_path = os.path.join(args.home, 'dataset', args.cos_path)
+        cos_sim = np.load(args.cos_path)
+        cos_sim = torch.from_numpy(cos_sim).float()
+        cos_sim = torch.where(cos_sim < 0.7, torch.zeros_like(cos_sim), cos_sim) # similarity 0.7 미만인 값들은 다 0.0으로 바꾸기
+        
+        args.items_path = os.path.join(args.home, 'dataset', args.items_path)
+        items = json.load(open(args.items_path, 'r', encoding='utf-8'))
+        item2idx = {name: i for i, name in enumerate(items)}
+
+        reward_fn = make_reward_sum_acc_sim(args, log_file, cos_sim, item2idx)
+    else:
+        reward_fn = make_reward_sum(args, log_file)
+    
+    print(f'reward_fn: {args.reward_fn}')
     reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
     print(f'reward coeff: {reward_coeff}')
 
