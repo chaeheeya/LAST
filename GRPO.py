@@ -65,6 +65,8 @@ def parse_args():
     parser.add_argument('--eval_prompt', type=str)
     parser.add_argument('--cos_path', type=str, default='')
     parser.add_argument('--items_path', type=str, default='')
+    parser.add_argument('--threshold_sim', type=float, default=0.7)
+
     
 
     # Train
@@ -813,7 +815,7 @@ if __name__=="__main__":
         args.cos_path = os.path.join(args.home, 'dataset', args.cos_path)
         cos_sim = np.load(args.cos_path)
         cos_sim = torch.from_numpy(cos_sim).float()
-        cos_sim = torch.where(cos_sim < 0.7, torch.zeros_like(cos_sim), cos_sim) # similarity 0.7 미만인 값들은 다 0.0으로 바꾸기
+        cos_sim = torch.where(cos_sim < args.threshold_sim, torch.zeros_like(cos_sim), cos_sim) # similarity 0.7 미만인 값들은 다 0.0으로 바꾸기
         
         args.items_path = os.path.join(args.home, 'dataset', args.items_path)
         items = json.load(open(args.items_path, 'r', encoding='utf-8'))
