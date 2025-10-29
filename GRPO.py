@@ -216,6 +216,17 @@ The recommended item and response are enclosed within <item></item> and <answer>
 When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
 The generated response should not exceed 100 tokens.'''
 
+instruction_target_item='''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+(The recommended item is %s.)
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
+
+inst = instruction_target_item
+
 def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, train_only_resp=False):
 
     # dialog -> utterance 로 쪼개기
@@ -235,6 +246,9 @@ def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, 
         
         ###########################################
         dialog = data['DIALOG'][-6:]
+        if inst == instruction_target_item:
+            input_inst = inst % data['TOPIC']
+            instruction = input_inst
         dialog.insert(0, {'role': 'system', 'content': instruction})
         context = dialog
         # original_context_len = len(
@@ -536,6 +550,65 @@ def make_reward_sum_acc_sim(args, log_file, cos, item2idx):
 
 
 
+def make_reward_only_response(args, log_file):
+    
+    
+    def reward_sum(prompts=None, completions=None, **kwargs):
+        # print("Evaluating by GPT!")
+        '''
+        TRL이 호출하는 reward function. 각 completions에 대한 보상 리스트를 반환해야함.
+        하나의 dialog에 대해 생성한 응답들 각각에 대한 평가 항목별 점수를 합하여 정규화한 점수들
+        이때, acc 지표는 0/1 이 아닌 recommended item과 target item 사이의 cosine_sim을 기준으로 점수를 받음 
+        :param group_evaluations:
+        :return: List[float]
+        '''
+        # reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+        reward_coeff = [float(1/3), float(1/3), float(1/3)]
+        # print(f'reward coeff: {reward_coeff}')
+        
+        group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        
+        rewards = []
+        for d in group_evaluations:
+            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
+            # min-max normalization
+            r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
+            rewards.append(r)
+            
+            
+        #-------- txt 파일로 로그 저장하기 -------
+        metrics = ["informativeness", "fluency", "relevance"]
+        B = len(prompts)//args.num_generations if prompts is not None else 0
+        G = int(args.num_generations)
+        idx = 0
+        
+        for b in range(B):
+            dialog_id = next(DIALOG_ID_GEN)
+            start = idx
+            end = min(start+G, len(completions))
+            
+            log_file.write(f"\n====================== Dialog {dialog_id} ======================\n")
+            log_file.write("[Dialog]\n")
+            log_file.write((dialogs[b*args.num_generations] or "") + "\n\n")
+            
+            for k, j in enumerate(range(start, end), start=1):
+                log_file.write("----------------------------------------\n")
+                log_file.write(f"[Completion {k}]\n")
+                log_file.write((f"System: {completions[j]}" or "") + "\n")
+                
+                temp = {}
+                for k in metrics:
+                    temp[k] = group_evaluations[j][k]
+                log_file.write("### reward by metric: " + json.dumps(temp, ensure_ascii=False) + "\n")
+                log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
+            log_file.flush()
+            idx = end
+        
+        return rewards
+    reward_sum.__name__="reward_sum"
+    return reward_sum
+
+
 # GPT Eval 호출 ------------------------------------------------------------------------------------------------------
 def gpt_eval(args, prompts: List[str], completions: List[str]):
 
@@ -781,7 +854,7 @@ if __name__=="__main__":
     else:
         raise ValueError('Invalid data path')
 
-    dataset = dataset_processing(args, train_dataset, tokenizer, instruction_with_target, rank, world_size)
+    dataset = dataset_processing(args, train_dataset, tokenizer, inst, rank, world_size)
     hf_train_dataset = HFDataset.from_list(dataset[:args.traindata_len])
 
     print('Dataset size:', len(hf_train_dataset))
@@ -822,6 +895,9 @@ if __name__=="__main__":
         item2idx = {name: i for i, name in enumerate(items)}
 
         reward_fn = make_reward_sum_acc_sim(args, log_file, cos_sim, item2idx)
+    elif 'only_response' in args.reward_fn:
+        reward_fn = make_reward_only_response(args, log_file)
+    
     else:
         reward_fn = make_reward_sum(args, log_file)
     
