@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
     parser.add_argument('--num_train_epochs', type=int, default=2)
     parser.add_argument('--learning_rate', type=float, default=3e-5)
-    parser.add_argument('--logging_steps', type=int, default=100)
+    parser.add_argument('--logging_steps', type=int, default=50)
     parser.add_argument('--step_size', type=int, default=300)
     parser.add_argument('--data_path', type=str, default="")
     parser.add_argument('--traindata_len', type=int)
@@ -156,7 +156,7 @@ class SaveEveryEpochCallback(TrainerCallback):
 
 
 class StepSaveAndLogCallback(TrainerCallback):
-    def __init__(self, args, save_steps=100):
+    def __init__(self, args, save_steps=50):
         self.log_name = args.log_name
         self.saved_model_path = args.output_path
         self.no_save = getattr(args, "no_save", False)
@@ -940,7 +940,7 @@ if __name__=="__main__":
         num_train_epochs=args.num_train_epochs,
         bf16=True,
         logging_strategy="steps",  # 스텝 단위 로깅
-        logging_steps=100,         # 매 100스텝마다 log() 자동 호출
+        logging_steps=50,         # 매 100스텝마다 log() 자동 호출
         save_strategy="no",        # (원하면 따로 설정)
         # Parameters that control de data preprocessing
         max_completion_length=args.max_completion_length,
