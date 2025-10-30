@@ -27,6 +27,17 @@ The recommended item and response are enclosed within <item></item> and <answer>
 When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
 The generated response should not exceed 100 tokens.'''
 
+instruction_target_item='''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+(The recommended item is %s.)
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
+
+inst = instruction_target_item
+
 class Dataset_processing(Dataset):
     def __init__(self, args, train_dataset, test_dataset, tokenizer, instruction):
         self.args = args
@@ -59,9 +70,6 @@ class Dataset_processing(Dataset):
         elif self.args.dataset == 'test':
             dataset = self.test_dataset
 
-        if self.args.temp_data:
-            dataset = json.load(open('/home/user/chaehee/LAST/dataset/GRPO_train_base/GRPO_1022100927_train_log_balance_data_w_topic.json', 'r', encoding='utf-8'))
-
             for data in dataset:
                 dialog = data['dialog'].split('\n')
                 context = []
@@ -80,8 +88,13 @@ class Dataset_processing(Dataset):
         print("Dataset length: ", len(dataset))
         self.formatted_dataset = []
         for data in dataset:
+            if inst == instruction_target_item:
+                instruct = self.instruction % data['topic']
+            else:
+                instruct = self.instruction
+            
             formatted_context = self.tokenizer.apply_chat_template(
-                [{'role': 'system', 'content': self.instruction}] + data['dialog'][-6:],
+                [{'role': 'system', 'content': instruct}] + data['dialog'][-6:],
                 tokenize=False,
                 add_generation_prompt=True)
             # formatted_context = self.tokenizer(formatted_context, padding='max_length', truncation=True, max_length=1024, return_tensors='pt')
@@ -222,7 +235,7 @@ if __name__ == '__main__':
     inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
     inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
 
-    dataset = Dataset_processing(args, inspired2_train, inspired2_test, tokenizer, instruction_with_target)
+    dataset = Dataset_processing(args, inspired2_train, inspired2_test, tokenizer, inst)
     dataset_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     step = 1
