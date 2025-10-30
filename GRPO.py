@@ -26,7 +26,8 @@ from tqdm import tqdm
 from datetime import datetime
 from pytz import timezone
 
-from prompt_template import EVAL_only_response
+from prompt_template import EVAL_only_response, EVAL_PROMPT_NORMAL, EVAL_PROMPT_STRICT
+
 
 # -------------------------------------------------------------------------------------------
 
@@ -47,7 +48,7 @@ def parse_args():
     parser.add_argument('--logging_steps', type=int, default=100)
     parser.add_argument('--step_size', type=int, default=300)
     parser.add_argument('--data_path', type=str, default="")
-    parser.add_argument('--traindata_len', type=int, default=1000)
+    parser.add_argument('--traindata_len', type=int)
     parser.add_argument('--no_shuffle', action='store_true')
 
 
@@ -66,7 +67,7 @@ def parse_args():
     parser.add_argument('--cos_path', type=str, default='')
     parser.add_argument('--items_path', type=str, default='')
     parser.add_argument('--threshold_sim', type=float, default=0.7)
-
+    parser.add_argument('--mode', type=str, default='normal')
     
 
     # Train
@@ -225,6 +226,9 @@ Create a response in which the system recommends the item the user would prefer,
 When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
 The generated response should not exceed 100 tokens.'''
 
+
+
+
 inst = instruction_target_item
 
 def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, train_only_resp=False):
@@ -297,7 +301,7 @@ def make_reward_sum(args, log_file):
     # state = {"dialog_counter": 0}
     
     
-    def reward_sum(prompts=None, completions=None, **kwargs):
+    def reward_sum(prompts=None, completions=None, mode='normal', **kwargs):
         # print("Evaluating by GPT!")
         '''
         TRL이 호출하는 reward function. 각 completions에 대한 보상 리스트를 반환해야함.
@@ -306,9 +310,13 @@ def make_reward_sum(args, log_file):
         :return: List[float]
         '''
         reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+        reward_coeff = [1/3, 1/3, 1/3]
         # print(f'reward coeff: {reward_coeff}')
         
-        group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        group_evaluations_normal, dialogs = gpt_eval(args, prompts, completions, mode='normal')
+        group_evaluations_hard, _ = gpt_eval(args, prompts, completions, mode='hard')
+        # group_evaluations = group_evaluations_normal if mode == 'normal' else group_evaluations_hard
+
         target_items = []
         item_evaluations = []
         for topic, resp in zip(kwargs['TOPIC'], completions):
@@ -331,17 +339,26 @@ def make_reward_sum(args, log_file):
                 item_evaluations.append(0.0)
 
         
-        rewards = []
-        for d, i in zip(group_evaluations, item_evaluations):
+        rewards_normal = []
+        for d, i in zip(group_evaluations_normal, item_evaluations):
             s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
-            s.append(i)
+            # s.append(i)
             # min-max normalization
             r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
-            rewards.append(r)
-            
-            
+            rewards_normal.append(r)
+        
+        rewards_hard = []
+        for d, i in zip(group_evaluations_hard, item_evaluations):
+            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
+            # s.append(i)
+            # min-max normalization
+            r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
+            rewards_hard.append(r)
+        
+        rewards = rewards_normal if args.mode == 'normal' else rewards_hard
+
         #-------- txt 파일로 로그 저장하기 -------
-        metrics = ["informativeness", "fluency", "relevance", "accuracy"]
+        metrics = ["informativeness", "fluency", "relevance"]
         B = len(prompts)//args.num_generations if prompts is not None else 0
         G = int(args.num_generations)
         idx = 0
@@ -360,12 +377,17 @@ def make_reward_sum(args, log_file):
                 log_file.write(f"[Completion {k}]\n")
                 log_file.write((f"System: {completions[j]}" or "") + "\n")
                 
-                group_evaluations[j]['accuracy'] = item_evaluations[j]
                 temp = {}
                 for k in metrics:
-                    temp[k] = group_evaluations[j][k]
-                log_file.write("### reward by metric: " + json.dumps(temp, ensure_ascii=False) + "\n")
-                log_file.write(f"### sum reward: {rewards[j]:.6f}\n\n")
+                    temp[k] = group_evaluations_normal[j][k]
+                log_file.write("### reward by metric (normal): " + json.dumps(temp, ensure_ascii=False) + "\n")
+                log_file.write(f"### sum reward (normal): {rewards_normal[j]:.6f}\n\n")
+                
+                temp = {}
+                for k in metrics:
+                    temp[k] = group_evaluations_hard[j][k]
+                log_file.write("### reward by metric (hard): " + json.dumps(temp, ensure_ascii=False) + "\n")
+                log_file.write(f"### sum reward (hard): {rewards_hard[j]:.6f}\n\n")
             log_file.write(f"[Target]: {target_items[b]}\n")
             log_file.flush()
             idx = end
@@ -610,7 +632,7 @@ def make_reward_only_response(args, log_file):
 
 
 # GPT Eval 호출 ------------------------------------------------------------------------------------------------------
-def gpt_eval(args, prompts: List[str], completions: List[str]):
+def gpt_eval(args, prompts: List[str], completions: List[str], mode: str='normal'):
 
     client = OpenAI(api_key=args.access_token)
 
@@ -620,31 +642,8 @@ def gpt_eval(args, prompts: List[str], completions: List[str]):
     BASE_BACKOFF = 0.6
     JITTER = 0.2
 
-    EVAL_PROMPT = """I will provide you with a dialog and a response generated by a Conversational Recommender System (CRS).
-
-Dialog:
-%s
-
-Response:
-%s
-
-Evaluate the response along explanation quality.
-1) Informativeness: Does the explanation incorporate rich and meaningful knowledge about the recommended item?
-2) Fluency: Is the explanation natural, coherent, and expressed with varied wording?
-3) Relevance: Does the explanation highlight the features of the recommended item that are directly relevant to the dialog context?
-
-Scoring: Use a 1–5 scale for each criterion.
-- 1 point: Very poor. Fails almost entirely to meet the criterion.
-- 2 points: Weak. Shows partial adequacy but remains insufficient.
-- 3 points: Moderate. Meets the minimum requirement but lacks depth or strength.
-- 4 points: Good. Clear, specific, and contextually appropriate, though not outstanding.
-- 5 points: Excellent. Rich, highly natural, and strongly aligned with the context. Award only if it clearly stands out.
-
-Output format:
-<think>reasoning process here</think>
-<answer>{"informativeness": <1–5>, "fluency": <1–5>, "relevance": <1–5>}</answer>"""
-
-
+    EVAL_PROMPT = EVAL_PROMPT_NORMAL if mode == 'normal' else EVAL_PROMPT_STRICT
+    
     def _extract_between(text: str, start_tag="<answer>", end_tag="</answer>") -> str:
         s = text.find(start_tag)
         if s == -1:
@@ -855,6 +854,10 @@ if __name__=="__main__":
         raise ValueError('Invalid data path')
 
     dataset = dataset_processing(args, train_dataset, tokenizer, inst, rank, world_size)
+    
+    if not args.traindata_len:
+        args.traindata_len = len(dataset)
+
     hf_train_dataset = HFDataset.from_list(dataset[:args.traindata_len])
 
     print('Dataset size:', len(hf_train_dataset))
@@ -902,8 +905,7 @@ if __name__=="__main__":
         reward_fn = make_reward_sum(args, log_file)
     
     print(f'reward_fn: {args.reward_fn}')
-    reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
-    print(f'reward coeff: {reward_coeff}')
+
 
 
     # reward_fn = make_dummy_reward_sum(args)
