@@ -70,20 +70,6 @@ class Dataset_processing(Dataset):
         elif self.args.dataset == 'test':
             dataset = self.test_dataset
 
-            for data in dataset:
-                dialog = data['dialog'].split('\n')
-                context = []
-                for utt in dialog:
-                    if "System: " in utt:
-                        utt = utt.split('System: ')[1].split('\n')[0]
-                        context.append({'role': "assistant", 'content': utt})
-                    elif "User: " in utt:
-                        utt = utt.split('User: ')[1].split('\n')[0]
-                        context.append({'role': "user", 'content': utt})
-                    else:
-                        print('ERROR')
-                data['dialog'] = context
-
 
         print("Dataset length: ", len(dataset))
         self.formatted_dataset = []
