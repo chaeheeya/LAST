@@ -9,7 +9,7 @@ import argparse
 import numpy as np
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, SequentialSampler
 
 from typing import List, Dict, Any
 from functools import partial
@@ -48,8 +48,11 @@ def parse_args():
     parser.add_argument('--logging_steps', type=int, default=50)
     parser.add_argument('--step_size', type=int, default=300)
     parser.add_argument('--data_path', type=str, default="")
+    parser.add_argument('--dataset_start', type=int, default=0) # 안먹힘 ..
     parser.add_argument('--traindata_len', type=int)
     parser.add_argument('--no_shuffle', action='store_true')
+    parser.add_argument('--sequential_dataset', action='store_true')
+    
 
 
     # GRPO config
@@ -508,7 +511,7 @@ def make_reward_sum_acc_sim(args, log_file, cos, item2idx):
             # name = topic[:match.start()].strip()
 
             required_tags = ['<item>', '</item>']
-            target_items.append(topic)
+            # target_items.append(topic)
 
             rec_item = resp.split('<answer>')[0].split('</item>')[0].split('<item>')[-1].strip()
 
@@ -941,7 +944,7 @@ if __name__=="__main__":
         bf16=True,
         logging_strategy="steps",  # 스텝 단위 로깅
         logging_steps=50,         # 매 100스텝마다 log() 자동 호출
-        save_strategy="no",        # (원하면 따로 설정)
+        save_strategy="epoch",        # (원하면 따로 설정)
         # Parameters that control de data preprocessing
         max_completion_length=args.max_completion_length,
         num_generations=args.num_generations, # 하나의 input당 생성하는 응답 개수
@@ -968,7 +971,26 @@ if __name__=="__main__":
     # expected = math.ceil(len(hf_train_dataset) / args.batch_size) * args.num_train_epochs // max(1, args.gradient_accumulation_steps)
     # print("[DEBUG] expected_global_steps =", expected)
 
-    
+    if args.sequential_dataset:
+        trainer._get_train_sampler = lambda: SequentialSampler(trainer.train_dataset)
+        sliced_dataset = trainer.train_dataset[args.dataset_start:]
+
+        trainer.train_dataloader = DataLoader(
+            sliced_dataset,
+            batch_size=trainer.args.per_device_train_batch_size,
+            sampler=trainer._get_train_sampler(),
+            collate_fn=trainer.data_collator,
+            drop_last=trainer.args.dataloader_drop_last,
+            num_workers=trainer.args.dataloader_num_workers,
+            pin_memory=trainer.args.dataloader_pin_memory,
+        )
+
+
     print("🚀 GRPO 학습 시작")
     trainer.train()
     print("✅ Trainer.train() finished")
+
+    # 마지막 모델도 저장
+    trainer.save_model()
+    trainer.tokenizer.save_pretrained(trainer.args.output_dir)
+
