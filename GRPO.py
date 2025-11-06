@@ -71,6 +71,7 @@ def parse_args():
     parser.add_argument('--items_path', type=str, default='')
     parser.add_argument('--threshold_sim', type=float, default=0.7)
     parser.add_argument('--mode', type=str, default='normal')
+    parser.add_argument('--adaptive_reward', action='store_true')
     
 
     # Train
@@ -588,13 +589,20 @@ def make_reward_only_response(args, log_file):
         :return: List[float]
         '''
         # reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
-        reward_coeff = [float(1/3), float(1/3), float(1/3)]
+        # reward_coeff = [float(1/3), float(1/3), float(1/3)]
         # print(f'reward coeff: {reward_coeff}')
         
         group_evaluations, dialogs = gpt_eval(args, prompts, completions)
         
         rewards = []
         for d in group_evaluations:
+            # adaptive reward
+            if args.adaptive_reward:
+                gap = [int(5-int(d[k])) for k in ["informativeness", "fluency", "relevance"]]
+                reward_coeff = [float(1/sum(gap) * g) for g in gap]
+            else:
+                reward_coeff = [float(1/3), float(1/3), float(1/3)]
+
             s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
             # min-max normalization
             r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
