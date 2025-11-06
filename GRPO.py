@@ -588,7 +588,7 @@ def make_reward_only_response(args, log_file):
         :param group_evaluations:
         :return: List[float]
         '''
-        # reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+        reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
         # reward_coeff = [float(1/3), float(1/3), float(1/3)]
         # print(f'reward coeff: {reward_coeff}')
         
@@ -598,10 +598,7 @@ def make_reward_only_response(args, log_file):
         for d in group_evaluations:
             # adaptive reward
             if args.adaptive_reward:
-                gap = [int(5-int(d[k])) for k in ["informativeness", "fluency", "relevance"]]
-                reward_coeff = [float(1/sum(gap) * g) for g in gap]
-            else:
-                reward_coeff = [float(1/3), float(1/3), float(1/3)]
+                reward_coeff = [float(1/sum(d.values()) * d[k]) for k in ["informativeness", "fluency", "relevance"]]
 
             s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
             # min-max normalization
