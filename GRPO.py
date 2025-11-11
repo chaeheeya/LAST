@@ -7,6 +7,7 @@ import time
 import random
 import argparse
 import numpy as np
+import pandas as pd
 
 import torch
 from torch.utils.data import Dataset, DataLoader, SequentialSampler
@@ -16,6 +17,8 @@ from functools import partial
 from itertools import count
 
 from openai import OpenAI
+from google import genai
+
 from trl import GRPOTrainer, GRPOConfig
 from datasets import load_dataset, Dataset as HFDataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl,TrainingArguments
@@ -34,8 +37,8 @@ from prompt_template import EVAL_only_response, EVAL_PROMPT_NORMAL, EVAL_PROMPT_
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    # GPT
-    parser.add_argument('--gpt_model', type=str, default="gpt-4.1")
+    # LLM API
+    parser.add_argument('--reward_model', type=str, default="gpt-4.1")
     parser.add_argument('--access_token', type=str, default="")
 
     # Train
@@ -65,13 +68,14 @@ def parse_args():
 
     # reward
     parser.add_argument('--reward_fn', type=str, default="make_sum") 
-    parser.add_argument('--reward_coeff', type=str, default="0.25, 0.25, 0.25, 0.25")
+    parser.add_argument('--reward_coeff', type=str, default="balance")
     parser.add_argument('--eval_prompt', type=str)
     parser.add_argument('--cos_path', type=str, default='')
     parser.add_argument('--items_path', type=str, default='')
     parser.add_argument('--threshold_sim', type=float, default=0.7)
     parser.add_argument('--mode', type=str, default='normal')
     parser.add_argument('--adaptive_reward', action='store_true')
+    parser.add_argument('--normalization_level', type=str, default="reward") 
     
 
     # Train
@@ -488,8 +492,6 @@ def make_reward_sum_acc_sim(args, log_file, cos, item2idx):
         i, j = item2idx[normalize_for_match(item1_name)], item2idx[normalize_for_match(item2_name)]
         return float(cos[i][j])
         
-
-    
     def reward_sum(prompts=None, completions=None, **kwargs):
         # print("Evaluating by GPT!")
         '''
@@ -578,7 +580,6 @@ def make_reward_sum_acc_sim(args, log_file, cos, item2idx):
 
 def make_reward_only_response(args, log_file):
     
-    
     def reward_sum(prompts=None, completions=None, **kwargs):
         # print("Evaluating by GPT!")
         '''
@@ -588,20 +589,37 @@ def make_reward_only_response(args, log_file):
         :param group_evaluations:
         :return: List[float]
         '''
-        reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
-        # reward_coeff = [float(1/3), float(1/3), float(1/3)]
-        # print(f'reward coeff: {reward_coeff}')
+        if args.reward_coeff == "balance":
+            reward_coeff = [float(1/3), float(1/3), float(1/3)]
+        else:
+            reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+        print(f'reward coeff: {reward_coeff}')
+
         
-        group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        if "gpt" in args.reward_model:
+            group_evaluations, dialogs = gpt_eval(args, prompts, completions)
+        elif "gemini" in args.reward_model:
+            group_evaluations, dialogs = gemini_eval(args, prompts, completions)
+        else:
+            raise("REWARD MODEL ERROR")
         
         rewards = []
-        for d in group_evaluations:
+        for i, d in enumerate(group_evaluations):
             # adaptive reward
-            if args.adaptive_reward:
-                reward_coeff = [float(1/sum(d.values()) * d[k]) for k in ["informativeness", "fluency", "relevance"]]
+            # if args.adaptive_reward:
+            #     reward_coeff = [float(1/sum(d.values()) * d[k]) for k in ["informativeness", "fluency", "relevance"]]
+            if args.normalization_level == 'reward':
+                # min-max normalization
+                s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
+            elif args.normalization_level == 'metric':
+                
+                df = pd.DataFrame(group_evaluations)
+                summary = df.agg(['mean', lambda x: np.std(x.to_numpy(), ddof=0)])
+                summary = summary.rename(index={'<lambda>': 'std'})
 
-            s = [(float(d[k]) - 1.0) / (5.0 - 1.0)for k in ["informativeness", "fluency", "relevance"]]
-            # min-max normalization
+                s = [float((df[k][i]-summary[k]['mean'])/(summary[k]['std']+1e-4)) for k in ["informativeness", "fluency", "relevance"]]
+
+            
             r = sum([reward_coeff[i] * s[i] for i in range(len(reward_coeff))])
             rewards.append(r)
             
@@ -638,6 +656,9 @@ def make_reward_only_response(args, log_file):
     reward_sum.__name__="reward_sum"
     return reward_sum
 
+##########################################
+#   Reward Model             
+##########################################
 
 # GPT Eval 호출 ------------------------------------------------------------------------------------------------------
 def gpt_eval(args, prompts: List[str], completions: List[str], mode: str='normal'):
@@ -646,7 +667,7 @@ def gpt_eval(args, prompts: List[str], completions: List[str], mode: str='normal
 
     REQUIRED_KEYS = {"informativeness", "fluency", "relevance"}
     NEUTRAL = {"informativeness": 3, "fluency": 3, "relevance": 3}  # 항상 반환 강제 시 사용할 중립 점수
-    MAX_RETRIES = 5
+    MAX_RETRIES = 10000000000
     BASE_BACKOFF = 0.6
     JITTER = 0.2
 
@@ -733,7 +754,7 @@ def gpt_eval(args, prompts: List[str], completions: List[str], mode: str='normal
         for attempt in range(MAX_RETRIES+1):
             try:
                 evaluation = client.chat.completions.create(
-                    model=args.gpt_model,
+                    model=args.reward_model,
                     messages=[{"role": "user", "content": instruction}],
                     temperature=0,
                 )
@@ -752,6 +773,132 @@ def gpt_eval(args, prompts: List[str], completions: List[str], mode: str='normal
 
         results.append(eval_score)
     return results, dialogs
+
+
+
+# GEMINI Eval 호출 ------------------------------------------------------------------------------------------------------
+def gemini_eval(args, prompts: List[str], completions: List[str], mode: str='normal'):
+
+    client = genai.Client(api_key=args.access_token)
+
+    REQUIRED_KEYS = {"informativeness", "fluency", "relevance"}
+    NEUTRAL = {"informativeness": 3, "fluency": 3, "relevance": 3}  # 항상 반환 강제 시 사용할 중립 점수
+    MAX_RETRIES = 1000000000000
+    BASE_BACKOFF = 0.6
+    JITTER = 0.2
+
+    EVAL_PROMPT = EVAL_PROMPT_NORMAL if mode == 'normal' else EVAL_PROMPT_STRICT
+    
+    def _extract_between(text: str, start_tag="<answer>", end_tag="</answer>") -> str:
+        s = text.find(start_tag)
+        if s == -1:
+            raise ValueError("missing <answer> tag")
+        e = text.find(end_tag, s + len(start_tag))
+        if e == -1:
+            raise ValueError("missing </answer> tag")
+        content = text[s + len(start_tag): e].strip()
+        if not content:
+            raise ValueError("empty content between answer tags")
+        return content
+
+
+    def _parse_and_validate_scores(json_str: str) -> dict:
+        data = json.loads(json_str)
+        if not isinstance(data, dict):
+            raise ValueError("evaluation must be a JSON object")
+        missing = REQUIRED_KEYS - set(data.keys())
+        if missing:
+            raise KeyError(f"missing keys: {missing}")
+
+        cleaned = {}
+        for k in REQUIRED_KEYS:
+            v = data[k]
+            # 숫자/문자 섞여 들어오는 상황 방지: 정수로 보정
+            try:
+                v_int = int(round(float(v)))
+            except Exception:
+                raise ValueError(f"value for {k} not a number: {v}")
+            if not (1 <= v_int <= 5):
+                raise ValueError(f"value for {k} out of range [1,5]: {v_int}")
+            cleaned[k] = v_int
+        return cleaned
+    
+    def _convert_special_to_dialog(text:str) -> str:
+        """
+        <|start_header_id|>user<|end_header_id|> ... <|eot_id|> 
+        같은 형식을 User: ... / System: ... 형태로 변환
+        """
+        
+        # 매핑 규칙
+        role_map = {
+            "user": "User",
+            "assistant": "System",
+            "system": "System"
+        }
+        
+        parts = text.split("<|start_header_id|>")
+        dialogs = []
+
+        for part in parts[2:]:  # 첫 번째는 <|begin_of_text|> 앞부분이라 skip
+            try:
+                role, content = part.split("<|end_header_id|>", 1)
+                role = role.strip()
+                # eot 기준으로 발화 내용 분리
+                content = content.split("<|eot_id|>")[0].strip()
+                if content:
+                    dialogs.append(f"{role_map.get(role, role)}: {content}")
+            except Exception as e:
+                continue
+
+        return "\n".join(dialogs)
+        
+        
+
+    dialogs, results = [], []
+    for dialog, response in zip(prompts, completions):
+        
+        dialog = _convert_special_to_dialog(dialog)
+        dialogs.append(dialog)
+
+        response = response.split('<item>')[-1].split('</item')[-1].split('<answer>')[-1].split('</answer>')[0].strip()
+        if not response.startswith('System:'):
+            response = f'System: {response}'
+        
+        instruction = EVAL_PROMPT % (dialog, response)
+        eval_score = None
+
+        for attempt in range(MAX_RETRIES+1):
+            try:
+                generation_config = genai.GenerationConfig(temperature=0)
+                evaluation = client.models.generate_content(
+                    model=args.reward_model, 
+                    contents=instruction,
+                    generation_config=generation_config
+                    )
+                evaluation = evaluation.text
+                
+                
+                evaluation = client.chat.completions.create(
+                    model=args.reward_model,
+                    messages=[{"role": "user", "content": instruction}],
+                    temperature=0,
+                )
+                
+                raw_text = evaluation.choices[0].message.content.strip()
+                inside_tag_text = _extract_between(raw_text, "<answer>", "</answer>")
+                eval_score = _parse_and_validate_scores(inside_tag_text)  # 모든 key가 존재하는지 검사
+                break
+            
+            except Exception as e:
+                if attempt == MAX_RETRIES:
+                    eval_score = NEUTRAL.copy()
+                    break
+                sleep_s = (BASE_BACKOFF * (2 ** attempt)) * (1.0 + random.uniform(-JITTER, JITTER))
+                time.sleep(max(0.2, sleep_s))
+
+        results.append(eval_score)
+    return results, dialogs
+
 
 
 
@@ -888,7 +1035,6 @@ if __name__=="__main__":
     log_file = open(log_path, 'a', buffering=1, encoding='UTF-8')
 
 
-    
     # reward function 설정하기 -------------------------------------------------------------------------------------------
     # if 'make_sum' in args.reward_fn:
     #     reward_fn = make_reward_sum(args, log_file)
@@ -989,8 +1135,6 @@ if __name__=="__main__":
             num_workers=trainer.args.dataloader_num_workers,
             pin_memory=trainer.args.dataloader_pin_memory,
         )
-
-
     print("🚀 GRPO 학습 시작")
     trainer.train()
     print("✅ Trainer.train() finished")
