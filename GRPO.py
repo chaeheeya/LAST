@@ -593,7 +593,7 @@ def make_reward_only_response(args, log_file):
             reward_coeff = [float(1/3), float(1/3), float(1/3)]
         else:
             reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
-        print(f'reward coeff: {reward_coeff}')
+        # print(f'reward coeff: {reward_coeff}')
 
         
         if "gpt" in args.reward_model:
@@ -1059,6 +1059,12 @@ if __name__=="__main__":
         reward_fn = make_reward_sum(args, log_file)
     
     print(f'reward_fn: {args.reward_fn}')
+
+    if args.reward_coeff == "balance":
+            reward_coeff = [float(1/3), float(1/3), float(1/3)]
+    else:
+        reward_coeff = [float(i.strip()) for i in args.reward_coeff.split(',')]
+    print(f'reward coeff: {reward_coeff}')
 
 
 
