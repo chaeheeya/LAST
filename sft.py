@@ -35,13 +35,39 @@ from pytz import timezone
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
 
+
 instruction_with_target = '''Pretend you are a conversational recommender system. 
 I will provide you a dialog between a user and the system. 
 Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
 
+The recommended item and response are enclosed within <item></item> and <answer></answer> tags, respectively, i.e., <item>recommended item here</item>\n<answer>response here</answer>
+
 When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
 The generated response should not exceed 100 tokens.'''
 
+
+instruction_only_target = '''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+Create one item that the user would most likely prefer.
+
+The recommended item is enclosed within <item></item> tags. i.e., <item>recommended item here</item>
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+You should generate only one recommended item.'''
+
+
+
+instruction_target_item='''Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+(The recommended item is %s.)
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
+
+
+inst = instruction_target_item
 
 class QueryEvalCallback(TrainerCallback):
     def __init__(self, output_dir):
@@ -76,7 +102,13 @@ class Dataset_processing(Dataset):
                     context.append({'role': "user", 'content': utt})
                 else:
                     print('ERROR')
-            response_utt = data['RESPONSE'].split('System: ')[1].strip()
+            
+            if inst == instruction_target_item:
+                response_utt = data['RESPONSE'].split('<answer>')[-1].split('</answer')[0].strip()
+            elif inst == instruction_only_target:
+                response_utt = data['TOPIC']
+            else:
+                response_utt = data['RESPONSE']
             context.append({'role': "assistant", 'content': response_utt})
             data['DIALOG'] = context
 
@@ -88,9 +120,12 @@ class Dataset_processing(Dataset):
 
         self.formatted_dataset = []
         for data in self.dataset:
-
+            if inst == instruction_target_item:
+                instruct = self.instruction % data['TOPIC']
+            else:
+                instruct = self.instruction
             dialog = data['DIALOG'][-6:]
-            dialog.insert(0, {'role': 'system', 'content': self.instruction})
+            dialog.insert(0, {'role': 'system', 'content': instruct})
 
             context = dialog
             original_context_len = len(
@@ -100,6 +135,8 @@ class Dataset_processing(Dataset):
             # dialog_text = "\n".join([f"{i['role']}: {i['content']}" for i in data['dialog']])
 
             tokenized_context = tokenizer(formatted_context, truncation=True, add_special_tokens=False)
+            if len(tokenized_context) > tokenizer.model_max_length:
+                pass
 
             input_ids = tokenized_context.input_ids
             labels = input_ids.copy()
@@ -278,7 +315,7 @@ def main(args):
     dataset_path = os.path.join(args.home, 'dataset', 'sft_train', args.train_data)
     dataset = json.load(open(dataset_path, 'r', encoding='utf-8'))
 
-    train_dataset = Dataset_processing(args, dataset, tokenizer, instruction_with_target, rank, world_size, train_only_resp=args.train_only_response)
+    train_dataset = Dataset_processing(args, dataset, tokenizer, inst, rank, world_size, train_only_resp=args.train_only_response)
     # dataset_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Logging 설정
