@@ -1,6 +1,7 @@
 
 import os
 import time
+import random
 import pickle
 import json
 import argparse
@@ -23,11 +24,44 @@ The generated response should not exceed 100 tokens.
 ### Response:"""
 
 
+D2R_with_item_for_train = """Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+
+Here is the dialog.
+%s
+
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+(The recommended item is %s.)
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.
+
+### Response:"""
+
+
+D2R_with_item_for_test = """Pretend you are a conversational recommender system. 
+I will provide you a dialog between a user and the system. 
+
+Here is the dialog.
+%s
+
+Create a response in which the system recommends the item the user would prefer, along with relevant explanations.
+
+The recommended item and response are enclosed within <item></item> and <answer></answer> tags, respectively, i.e., <item>recommended item here</item>\n<answer>response here</answer>
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens..
+
+### Response:"""
+
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default="")
     parser.add_argument('--access_token', type=str, default="")
     parser.add_argument('--cnt', type=int, default=0)
     parser.add_argument('--log_name', type=str, default="")
+    parser.add_argument('--dataset', type=str, default="")
+
     args = parser.parse_args()
     return args
 
@@ -46,15 +80,31 @@ def execute(args,
         # content = mentioned_reviews_concat + refinement_template % instruction
         # print()
         try:
-            response = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "user",
-                     # "content": review_summary_template % (label, instruction, label)}
-                     "content": instruction}
+            kwargs = {
+                "model": MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": instruction
+                    }
                 ],
-                temperature=0,
-            )
+            }
+
+            # GPT-4 계열만 temperature=0 사용
+            if not MODEL.startswith("gpt-5"):
+                kwargs["temperature"] = 0
+
+            response = client.chat.completions.create(**kwargs)
+
+            # response = client.chat.completions.create(
+            #     model=MODEL,
+            #     messages=[
+            #         {"role": "user",
+            #          # "content": review_summary_template % (label, instruction, label)}
+            #          "content": instruction}
+            #     ],
+            #     temperature=0,
+            # )
 
             response = response.choices[0].message.content
 
@@ -90,22 +140,30 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
-    inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
-
-    prompt = D2R
-    MODEL = "gpt-4.1"
+    MODEL = args.model # gpt-4.1-mini / gpt-4.1 / gpt-5-mini / gpt-5.2
+    prompt = D2R_with_item_for_train
 
     instructions = []
-    for idx, data in enumerate(inspired2_train):
-        instruction = prompt % (data['dialog'])
+    dataset_path = os.path.join('dataset', args.dataset)
+    dataset = pickle.load(open(dataset_path, 'rb'))
+
+    for idx, data in enumerate(dataset):
+        dialogs = data['dialog'].split('\n')[-6:]
+        dialog = ''
+        for d in dialogs:
+            dialog += d
+            dialog += '\n'
+        dialog = dialog.strip()
+
+        instruction = prompt % (dialog, data['topic'])
         instructions.append(instruction)
+
 
     mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
     if args.log_name == '':
         log_name = f'response_gen/{mdhm}_{MODEL}_inspired2_test_GPT_response_100token.json'
     else:
-        log_name = args.log_name
+        log_name = f'response_gen/{mdhm}_{args.log_name}.json'
 
     args.log_file = open(os.path.join(log_name), 'a', buffering=1, encoding='UTF-8')
 

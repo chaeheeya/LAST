@@ -54,11 +54,37 @@ Based on the response evaluation, your task is to generate a refined response th
 The generated response should not exceed 100 tokens."""
 
 
+REFINE_RESPONSE_with_target='''I will give you a dialog between a user and the system, the system's next response, and an evaluation of that response in terms of informativeness, fluency, and relevance.
+
+Dialog:
+%s
+
+Response:
+%s
+
+Response Evaluation:
+%s
+
+The evaluator's assessment criteria are:
+1) Informativeness: Does the explanation incorporate rich and meaningful knowledge about the recommended item?
+2) Fluency: Is the explanation natural, coherent, and expressed with varied wording?
+3) Relevance: Does the explanation highlight the features of the recommended item that are directly relevant to the dialog context?
+
+Based on the response evaluation, your task is to generate a refined response that can achieve the best possible evaluation across informativeness, fluency, and relevance.
+(The recommended item is %s.)
+
+When mentioning any movie or item, write its name followed by its release year in parentheses (e.g., Inception (2010)).
+The generated response should not exceed 100 tokens.'''
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--access_token', type=str, default="")
     parser.add_argument('--cnt', type=int, default=0)
+    parser.add_argument('--dataset', type=str, default="")
+    parser.add_argument('--generated_response', type=str, default="")
+    parser.add_argument('--eval_gen_response', type=str, default="")
+
     parser.add_argument('--log_name', type=str, default="")
     args = parser.parse_args()
     return args
@@ -122,17 +148,21 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
-    inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
+    # inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
+    # inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
 
-    generated_response = json.load(open('response_gen/0905163347_gpt-4.1_inspired2_train_GPT_response_100token.json', 'r', encoding='utf-8'))
-    eval_gen_response = json.load(open('evaluation/gpt_eval/gpt-4.1_eval_inspired2_train_gpt-4.1-resp_twodimP.json', 'r', encoding='utf-8'))
+    dataset = pickle.load(open(args.dataset, 'rb'))
+    generated_response = json.load(open(args.generated_response, 'r', encoding='utf-8'))
+    eval_gen_response = json.load(open(args.eval_gen_response, 'r', encoding='utf-8'))
 
-    prompt = REFINE_RESPONSE_item_prompt
+    # generated_response = json.load(open('refinement/1112183900_gpt-4.1_inspired2_refinement.json', 'r', encoding='utf-8'))
+    # eval_gen_response = json.load(open('evaluation/gpt_eval/1112234438_gpt-4.1_eval_Refined_GPT-4.1_1112183900_insp2_train_resp_GPT-EVAL.json', 'r', encoding='utf-8'))
+
+    prompt = REFINE_RESPONSE_with_target
     MODEL = "gpt-4.1"
 
     instructions = []
-    for idx, (data, gen_response, eval_gen) in enumerate(zip(inspired2_train, generated_response, eval_gen_response)):
+    for idx, (data, gen_response, eval_gen) in enumerate(zip(dataset, generated_response, eval_gen_response)):
         dialog = data['dialog']
         new_response = gen_response['OUTPUT']
         if not new_response.strip().startswith('System: '):
@@ -141,14 +171,14 @@ if __name__ == "__main__":
         eval_response = eval_gen['OUTPUT'].split('<think>')[-1].split('</think>')[0].strip()
         target_item = data['topic']
 
-        instruction = prompt % (dialog, new_response, eval_response)
+        instruction = prompt % (dialog, new_response, eval_response, target_item)
         instructions.append(instruction)
 
     mdhm = str(datetime.now(timezone('Asia/Seoul')).strftime('%m%d%H%M%S'))
     if args.log_name == '':
         log_name = f'refinement/{mdhm}_{MODEL}_inspired2_refinement.json'
     else:
-        log_name = args.log_name
+        log_name = f'refinement/{mdhm}_{MODEL}_{args.log_name}.json'
 
     args.log_file = open(os.path.join(log_name), 'a', buffering=1, encoding='UTF-8')
 
