@@ -196,7 +196,7 @@ if __name__ == '__main__':
     result_path = os.path.join(args.home, 'response_gen')
     if not os.path.isdir(result_path):
         os.mkdir(result_path)
-    json_path = os.path.join(result_path, f'{mdhm}_{generation_file_name}_inspired2_LLaMA-3.1-response.json')
+    json_path = os.path.join(result_path, f'{mdhm}_{generation_file_name}_LLaMA-3.1-response.json')
     json_file = open(json_path, 'a', buffering=1, encoding='UTF-8')
     print('save path: ', json_path)
 
@@ -210,7 +210,8 @@ if __name__ == '__main__':
     # inspired2_train = pickle.load(open('dataset/INSPIRED2/train_pred_aug_dataset_inspired2_final.pkl', 'rb'))
     # inspired2_test = pickle.load(open('dataset/INSPIRED2/test_pred_aug_dataset_inspired2_final.pkl', 'rb'))
 
-    dataset = pickle.load(open(args.dataset, 'rb'))
+    dataset_path = os.path.join(args.home, args.dataset)
+    dataset = pickle.load(open(dataset_path, 'rb'))
 
 
     processed_dataset = Dataset_processing(args, dataset, tokenizer, inst)
