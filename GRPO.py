@@ -99,7 +99,6 @@ def parse_args():
 
 # 모델 load function ----------------------------------------------------------------------------------------------
 
-
 def load_base_model(model_name, model_path=''):
     device_map = {"": 0}
 
@@ -183,35 +182,6 @@ class StepSaveAndLogCallback(TrainerCallback):
                 print(f"[INFO] Step {step}: model saved at {save_path}")
 
 
-# 디버깅용 ---------------------------------------------------------------------------------------------------------
-# ==== advantage 통계 찍기 ======
-class InspectAdvantagesCallback(TrainerCallback):
-    def on_substep_end(self, args, state, control, **kwargs):
-        trainer = kwargs.get("trainer", None)
-        if trainer is None: return
-        inp = getattr(trainer, "_debug_last_inputs", None)
-        if not inp: return
-        adv = inp.get("advantages", None)
-        if adv is None: return
-        try:
-            m = float(adv.mean().item())
-            s = float(adv.std().item())
-            print(f"[DBG] step {state.global_step} advantages: shape={tuple(adv.shape)} mean={m:.4f} std={s:.4f}")
-        except Exception:
-            pass
-        
-# ===== gradient 생기는지 확인하기 ======
-class GradSumCallback(TrainerCallback):
-    def on_step_end(self, args, state, control, **kwargs):
-        model = kwargs.get("model", None)
-        if model is None: return
-        total = 0.0
-        for p in model.parameters():
-            if p.requires_grad and p.grad is not None:
-                total += float(p.grad.abs().sum().item())
-        print(f"[grad_sum] step {state.global_step}: {total:.3e}")
-
-
 # 데이터셋 ----------------------------------------------------------------------------------------------------------
 instruction = """Pretend you are a conversational recommender system. 
 Create a response that the system should provide."""
@@ -282,20 +252,20 @@ def dataset_processing(args, dataset, tokenizer, instruction, rank, world_size, 
     return dataset
 
 
-# target item 매칭
-TRANS = {
-    ord('’'): "'", ord('‘'): "'",
-    ord('“'): '"', ord('”'): '"',
-    ord('–'): '-', ord('—'): '-', ord('−'): '-',   # en/em dash, minus
-    ord('\u00A0'): ' ',                            # nbsp
-    ord('\u200B'): None, ord('\u200C'): None, ord('\u200D'): None,  # zero-width
-}
+# # target item 매칭
+# TRANS = {
+#     ord('’'): "'", ord('‘'): "'",
+#     ord('“'): '"', ord('”'): '"',
+#     ord('–'): '-', ord('—'): '-', ord('−'): '-',   # en/em dash, minus
+#     ord('\u00A0'): ' ',                            # nbsp
+#     ord('\u200B'): None, ord('\u200C'): None, ord('\u200D'): None,  # zero-width
+# }
 
-def normalize_for_match(s: str) -> str:
-    s = unicodedata.normalize('NFKC', s)  # 유니코드 정규화
-    s = s.translate(TRANS)                # 스마트 따옴표/대시 정리
-    s = re.sub(r'\s+', ' ', s).strip()    # 공백 정리
-    return s.casefold()
+# def normalize_for_match(s: str) -> str:
+#     s = unicodedata.normalize('NFKC', s)  # 유니코드 정규화
+#     s = s.translate(TRANS)                # 스마트 따옴표/대시 정리
+#     s = re.sub(r'\s+', ' ', s).strip()    # 공백 정리
+#     return s.casefold()
 
 
 
@@ -982,12 +952,6 @@ if __name__=="__main__":
     #         b.data = b.data.to(torch.float16)
 
 
-    ## reference 모델 설정 - 안씀
-    # ref_model = copy.deepcopy(model)
-    # for p in ref_model.parameters():
-    #     p.requires_grad = False
-    # ref_model.eval()
-
     ## 디바이스
     rank, world_size = 0, 1
     if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -1071,24 +1035,6 @@ if __name__=="__main__":
     # reward_fn = make_dummy_reward_sum(args)
     
     # # GRPO 설정 및 트레이너 ------------------------------------------------------------------------------------------------
-    # training_args = GRPOConfig(
-    #     output_dir=args.output_path,
-    #     per_device_train_batch_size=args.batch_size,
-    #     gradient_accumulation_steps=args.gradient_accumulation_steps,
-    #     num_train_epochs=args.num_train_epochs,
-    #     learning_rate=args.learning_rate,
-    #     logging_steps=args.logging_steps,
-    #     # bf16=False, fp16=False,
-        
-    #     # GRPO 핵심 파라미터
-    #     # generation_batch_size=args.batch_size * args.num_generations,
-    #     num_generations=args.num_generations, # 하나의 input당 생성하는 응답 개수
-    #     max_completion_length=args.max_completion_length,
-    #     temperature=args.temperature,
-    #     #   top_p=args.top_p,
-    #     beta=args.beta, # ref 모델과의 KL에 적용되는 파라미터
-    #     scale_rewards=args.scale_rewards
-    # )
 
     # Configure training arguments using GRPOConfig
     training_args = GRPOConfig(
@@ -1118,16 +1064,6 @@ if __name__=="__main__":
     )
 
 
-    # print("[DEBUG] N =", len(dataset))
-    # print("[DEBUG] batch_size =", args.batch_size)
-    # print("[DEBUG] epochs =", args.num_train_epochs)
-    # print("[DEBUG] grad_accum =", args.gradient_accumulation_steps)
-
-    # dl = DataLoader(hf_train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=False)
-    # print("[DEBUG] batches_per_epoch =", len(dl))
-    # expected = math.ceil(len(hf_train_dataset) / args.batch_size) * args.num_train_epochs // max(1, args.gradient_accumulation_steps)
-    # print("[DEBUG] expected_global_steps =", expected)
-
     if args.sequential_dataset:
         trainer._get_train_sampler = lambda: SequentialSampler(trainer.train_dataset)
         sliced_dataset = trainer.train_dataset[args.dataset_start:]
@@ -1148,4 +1084,3 @@ if __name__=="__main__":
     # 마지막 모델도 저장
     trainer.save_model()
     trainer.tokenizer.save_pretrained(trainer.args.output_dir)
-
